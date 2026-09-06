@@ -25,7 +25,7 @@ class SSHSession:
     Streams output in real-time to a callback and receives user/agent input.
     """
 
-    def __init__(self, host, port=22, username="root", password=None, key_path=None, auth_type=None, initial_cmd=None, on_output=None, on_close=None):
+    def __init__(self, host, port=22, username="root", password=None, key_path=None, auth_type=None, initial_cmd=None, on_output=None, on_close=None, remote_proxy_port=None):
         self.host = host
         self.port = int(port)
         self.username = username
@@ -35,6 +35,7 @@ class SSHSession:
         self.initial_cmd = initial_cmd
         self.on_output = on_output
         self.on_close = on_close
+        self.remote_proxy_port = remote_proxy_port
 
         self.client = None
         self.channel = None
@@ -92,7 +93,7 @@ class SSHSession:
                     except Exception:
                         pass
 
-                # Automatically establish reverse port forward for local proxy (e.g. 7897)
+                # Automatically establish reverse port forward for local proxy (e.g. remote 10808 -> local 7897)
                 try:
                     from server_helper.config import Config
                     from urllib.parse import urlparse
@@ -101,6 +102,17 @@ class SSHSession:
                         parsed = urlparse(proxy_url)
                         local_p = parsed.port or 7897
                         local_h = parsed.hostname or "127.0.0.1"
+
+                        # Determine all remote ports to forward (e.g. 10808 for server bashrc, 7897 for standard)
+                        remote_ports_to_try = []
+                        if self.remote_proxy_port:
+                            try:
+                                remote_ports_to_try.append(int(self.remote_proxy_port))
+                            except Exception:
+                                pass
+                        for p in [10808, local_p]:
+                            if p not in remote_ports_to_try:
+                                remote_ports_to_try.append(p)
 
                         def make_proxy_forwarder(l_h, l_p):
                             def handler(chan, origin, server):
@@ -138,8 +150,17 @@ class SSHSession:
                                     except Exception: pass
                             return handler
 
-                        transport.request_port_forward("127.0.0.1", local_p, make_proxy_forwarder(local_h, local_p))
-                        self._emit(f"\x1b[35m[Argos Proxy]\x1b[0m 已自动建立反向代理隧道: 远程 127.0.0.1:{local_p} ➔ 本地 {local_h}:{local_p}\r\n")
+                        succ_ports = []
+                        for r_port in remote_ports_to_try:
+                            try:
+                                transport.request_port_forward("127.0.0.1", r_port, make_proxy_forwarder(local_h, local_p))
+                                succ_ports.append(str(r_port))
+                            except Exception:
+                                pass
+
+                        if succ_ports:
+                            p_desc = "/".join(succ_ports)
+                            self._emit(f"\x1b[35m[Argos Proxy]\x1b[0m 已自动建立 SSH 反向代理隧道: 远程 127.0.0.1:[{p_desc}] ➔ 本地 {local_h}:{local_p}\r\n")
                 except Exception:
                     pass
 

@@ -110,13 +110,12 @@ class SessionManager:
 
             # Combine remote_dir with startup_cmd if provided
             full_init_cmd = ""
+            r_proxy_port = server_info.get("remote_proxy_port") or 10808
             try:
                 from server_helper.config import Config
-                from urllib.parse import urlparse
                 proxy_url = Config().get_proxy()
-                if proxy_url and "://" in proxy_url:
-                    p_port = urlparse(proxy_url).port or 7897
-                    full_init_cmd += f"export http_proxy='http://127.0.0.1:{p_port}' https_proxy='http://127.0.0.1:{p_port}' all_proxy='http://127.0.0.1:{p_port}' 2>/dev/null; "
+                if proxy_url:
+                    full_init_cmd += f"export http_proxy='http://127.0.0.1:{r_proxy_port}' https_proxy='http://127.0.0.1:{r_proxy_port}' all_proxy='http://127.0.0.1:{r_proxy_port}' 2>/dev/null; "
             except Exception:
                 pass
 
@@ -139,7 +138,8 @@ class SessionManager:
                 auth_type=ssh_auth,
                 initial_cmd=full_init_cmd,
                 on_output=on_output,
-                on_close=on_close
+                on_close=on_close,
+                remote_proxy_port=r_proxy_port
             )
             session.backend = backend
             ok, msg = backend.connect(cols=cols, rows=rows)
