@@ -137,9 +137,19 @@ def get_prompt_toolkit_style(theme):
     a = theme["accent"]
     s = theme["success"]
     d = theme["dim"]
+    txt = theme.get("text", "#ffffff")
     return Style.from_dict({
         "prompt": f"{p} bold",
         "badge": f"{s} bold",
         "dim": f"{d}",
         "accent": f"{a}",
+        "bottom-toolbar": f"bg:#181825 fg:{d}",
+        "completion-menu": f"bg:#1e1e2e fg:{txt}",
+        "completion-menu.completion": f"fg:{txt}",
+        "completion-menu.completion.current": f"bg:{p} fg:#11111b bold",
+        "completion-menu.meta.completion": f"fg:{d}",
+        "completion-menu.meta.completion.current": f"bg:{p} fg:#1e1e2e",
+        "scrollbar.background": f"bg:#181825",
+        "scrollbar.button": f"bg:{d}",
     })
+

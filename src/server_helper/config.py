@@ -199,7 +199,7 @@ class Config:
             ag = self.get_agent(agent_name)
             if ag and ag.get("model"):
                 return ag.get("model")
-        return settings.get("default_model") or "gemini-2.5-pro"
+        return settings.get("default_model") or "gemini-3.8-flash"
 
     def set_model(self, model_name, agent_name=None):
         model_name = (model_name or "").strip()

@@ -23,9 +23,12 @@ if sys.platform == "win32":
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.output import create_output, DummyOutput
 from prompt_toolkit.input import create_input, DummyInput
@@ -49,37 +52,50 @@ from session_manager import SessionManager
 
 console = Console()
 
-SLASH_COMMANDS = [
-    "/server",
-    "/theme",
-    "/model",
-    "/effort",
-    "/thinking",
-    "/proxy",
-    "/tasks",
-    "/switch",
-    "/terminal",
-    "/sh",
-    "/agent",
-    "/status",
-    "/broadcast",
-    "/close",
-    "/config",
-    "/clear",
-    "/help",
-    "/exit",
-    "/quit"
+COMMAND_REGISTRY = [
+    {"cmd": "/server",    "cat": "Remote", "desc": "切换或管理远程目标服务器 (scut-gpu 等)"},
+    {"cmd": "/files",     "cat": "Remote", "desc": "浏览工作区文件与目录树 (免耗 token)"},
+    {"cmd": "/sh",        "cat": "Remote", "desc": "连接全功能交互式终端 (Ctrl+] 返回)"},
+    {"cmd": "/model",     "cat": "Agent",  "desc": "切换活跃 LLM 模型 (gemini-3.8-flash 等)"},
+    {"cmd": "/effort",    "cat": "Agent",  "desc": "调节思考推理深度 (high/med/low/off)"},
+    {"cmd": "/proxy",     "cat": "System", "desc": "配置 HTTP 代理与 SSH 反向隧道 (10808/7897)"},
+    {"cmd": "/tasks",     "cat": "Tasks",  "desc": "查看后台任务运行看板与活动状态"},
+    {"cmd": "/switch",    "cat": "Tasks",  "desc": "在多个服务器/本地会话之间快速切换"},
+    {"cmd": "/broadcast", "cat": "Remote", "desc": "向全部活跃并发会话广播执行 Shell 命令"},
+    {"cmd": "/status",    "cat": "System", "desc": "查看目标环境 GPU、显存与系统负载"},
+    {"cmd": "/theme",     "cat": "System", "desc": "切换界面配色主题 (带实时动态预览)"},
+    {"cmd": "/config",    "cat": "System", "desc": "查看 setting.json 配置详情"},
+    {"cmd": "/clear",     "cat": "System", "desc": "清屏并重新绘制状态看板"},
+    {"cmd": "/help",      "cat": "System", "desc": "查看完整指令与快捷键指南"},
+    {"cmd": "/exit",      "cat": "System", "desc": "安全退出 Argos 并释放所有连接"},
 ]
 
-completer = WordCompleter(SLASH_COMMANDS, ignore_case=True, sentence=True)
+SLASH_COMMANDS = [item["cmd"] for item in COMMAND_REGISTRY]
+
+
+class ArgosSlashCompleter(Completer):
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if text.startswith("/"):
+            query = text.lower()
+            for item in COMMAND_REGISTRY:
+                if item["cmd"].lower().startswith(query):
+                    yield Completion(
+                        text=item["cmd"],
+                        start_position=-len(text),
+                        display=f"{item['cmd']:<12}",
+                        display_meta=f"[{item['cat']}] {item['desc']}"
+                    )
+
 
 POPULAR_MODELS = [
-    {"label": "gemini-2.5-pro", "desc": "Google flagship multimodal & coding model"},
-    {"label": "claude-3-7-sonnet", "desc": "Anthropic latest hybrid reasoning model"},
-    {"label": "claude-3-5-sonnet", "desc": "High performance standard coding model"},
-    {"label": "deepseek-r1", "desc": "Open-weight deep reasoning model"},
-    {"label": "deepseek-chat", "desc": "DeepSeek V3 general coding model"},
-    {"label": "gpt-4o", "desc": "OpenAI flagship omni model"}
+    {"label": "gemini-3.8-flash", "desc": "Google flagship default model (ultra fast & smart)"},
+    {"label": "gemini-3.8-pro",   "desc": "Google top-tier deep reasoning & multimodal model"},
+    {"label": "claude-3-7-sonnet", "desc": "Anthropic latest hybrid reasoning & coding model"},
+    {"label": "claude-3-5-sonnet", "desc": "Industry standard programming benchmark model"},
+    {"label": "deepseek-r1",       "desc": "Open-weight deep reasoning model"},
+    {"label": "deepseek-chat",     "desc": "DeepSeek V3 general coding model"},
+    {"label": "gpt-4o",            "desc": "OpenAI flagship multimodal omni model"}
 ]
 
 
@@ -97,6 +113,33 @@ class AgentCliApp:
 
         self._init_prompt_session()
 
+    def _render_bottom_toolbar(self):
+        session = self._get_active_session()
+        p = self.theme["primary"]
+        s = self.theme["success"]
+        d = self.theme["dim"]
+        a = self.theme["accent"]
+        if session:
+            srv = session.name
+            rdir = session.remote_dir or "/"
+            if len(rdir) > 26:
+                rdir = "..." + rdir[-23:]
+            agent = session.command or "agy"
+            model = getattr(session, "model", "") or self.config.get_model(agent)
+            return HTML(
+                f'<style fg="{s}">● {srv}</style> '
+                f'<style fg="{d}">|</style> '
+                f'<style fg="{p}">📁 {rdir}</style> '
+                f'<style fg="{d}">|</style> '
+                f'<style fg="{a}">🤖 {agent}:{model}</style> '
+                f'<style fg="{d}">| [Tab] Commands</style>'
+            )
+        proxy = self.config.get_proxy()
+        proxy_tag = f"proxy: {proxy}" if proxy else "direct"
+        return HTML(
+            f'<style fg="{d}">● idle | Type /server to connect | {proxy_tag} | [Tab] Commands</style>'
+        )
+
     def _init_prompt_session(self):
         try:
             pt_out = create_output()
@@ -113,7 +156,8 @@ class AgentCliApp:
         try:
             self.session_prompt = PromptSession(
                 history=FileHistory(self.history_file),
-                completer=completer,
+                completer=ArgosSlashCompleter(),
+                bottom_toolbar=self._render_bottom_toolbar,
                 output=pt_out,
                 input=pt_in,
                 style=pt_style
@@ -121,13 +165,18 @@ class AgentCliApp:
         except Exception:
             self.session_prompt = None
 
-    def _get_user_input(self, prompt_text):
+    def _get_user_input(self, prompt_obj):
         if self.session_prompt:
             try:
-                return self.session_prompt.prompt(prompt_text).strip()
+                with patch_stdout():
+                    return self.session_prompt.prompt(prompt_obj).strip()
             except Exception:
                 pass
-        return input(prompt_text).strip()
+        import re
+        plain = getattr(prompt_obj, "value", str(prompt_obj))
+        clean_text = re.sub(r"<[^>]+>", "", plain)
+        clean_text = re.sub(r"\[/?.*?\]", "", clean_text)
+        return input(clean_text).strip()
 
     def render_header(self):
         p = self.theme["primary"]
@@ -156,13 +205,14 @@ class AgentCliApp:
         proxy_str = f"[{s}]{proxy}[/{s}]" if proxy else f"[{d}]direct (no proxy)[/{d}]"
 
         card = (
-            f"[{p}][bold]● argos[/bold][/{p}] [{d}]v0.3.0 · AI agent remote multi-task orchestrator[/{d}]\n\n"
+            f"[{p}]  ▄▀█ █▀█ █▀▀ █▀█ █▀[/{p}]   [{txt}][bold]argos[/bold][/{txt}] [{d}]v0.3.0 · autonomous coding agent orchestrator[/{d}]\n"
+            f"[{p}]  █▀█ █▀▄ █▄█ █▄█ ▄█[/{p}]   [{d}]Ἄργος Πανόπτης · multi-server remote workspace harness[/{d}]\n\n"
             f"  [{a}]Target:[/{a}]    [{txt}]{srv_str}[/{txt}] {status_tag}\n"
             f"  [{a}]Workspace:[/{a}] [{p}]{rdir}[/{p}]\n"
             f"  [{a}]Engine:[/{a}]    [{txt}]{agent_str}[/{txt}] [{d}](effort: {effort})[/{d}]\n"
             f"  [{a}]Proxy:[/{a}]     {proxy_str}\n"
             f"  [{a}]Theme:[/{a}]     [{txt}]{t_name}[/{txt}] {swatch}\n\n"
-            f"[{d}]Shortcuts: [/][{a}]/server[/] [{d}]target[dim] · [/][{a}]/model[/] [{d}]models[dim] · [/][{a}]/proxy[/] [{d}]proxy[dim] · [/][{a}]/effort[/] [{d}]effort[dim] · [/][{a}]/theme[/] [{d}]themes[dim] · [/][{a}]/sh[/] [{d}]terminal[dim] · [/][{a}]/help[/] [{d}]help[dim]"
+            f"[{d}]Shortcuts: [/][{a}]/server[/] [{d}]target[dim] · [/][{a}]/files[/] [{d}]files[dim] · [/][{a}]/sh[/] [{d}]terminal[dim] · [/][{a}]/model[/] [{d}]models[dim] · [/][{a}]/proxy[/] [{d}]proxy[dim] · [/][{a}]/help[/] [{d}]help[dim]"
         )
         return Panel(card, border_style=p, padding=(0, 1))
 
@@ -213,17 +263,22 @@ class AgentCliApp:
 
         if session:
             srv_info = session.server_info or {}
-            host = srv_info.get("host", "local")
-            user = srv_info.get("user") or srv_info.get("username") or os.getenv("USERNAME", "user")
+            host = srv_info.get("name") or srv_info.get("host", "local")
             rdir = session.remote_dir or "/"
-            if len(rdir) > 22:
-                rdir = "..." + rdir[-19:]
+            if len(rdir) > 20:
+                rdir = "..." + rdir[-17:]
             agent = session.command or "agy"
             model_info = getattr(session, "model", "") or self.config.get_model(agent)
             model_short = model_info.split("/")[-1] if model_info else ""
-            model_tag = f" · {model_short}" if model_short else ""
-            return f"[{p}]●[/{p}] [{s}]{user}@{host}[/{s}]:[{d}]{rdir}[/{d}] [{a}]({agent}{model_tag})[/{a}] › "
-        return f"[{p}]●[/{p}] [bold]argos[/bold] › "
+            model_tag = f"·{model_short}" if model_short else ""
+            return HTML(
+                f'<style fg="{p}">●</style> '
+                f'<style fg="{s}"><b>[{host}]</b></style> '
+                f'<style fg="{d}">📁 {rdir}</style> '
+                f'<style fg="{a}">({agent}{model_tag})</style> '
+                f'<style fg="{p}">›</style> '
+            )
+        return HTML(f'<style fg="{p}">●</style> <b>argos</b> <style fg="{a}">›</style> ')
 
     def handle_slash_command(self, cmd, arg):
         if cmd in ("/exit", "/quit"):
@@ -255,7 +310,10 @@ class AgentCliApp:
         elif cmd == "/proxy":
             self.action_proxy(arg)
 
-        elif cmd in ("/tasks", "/sessions", "/ls"):
+        elif cmd in ("/files", "/ls", "/dir"):
+            self.action_list_files(arg)
+
+        elif cmd in ("/tasks", "/sessions"):
             self.action_list_tasks()
 
         elif cmd in ("/switch", "/sw"):
@@ -288,17 +346,18 @@ class AgentCliApp:
         d = self.theme["dim"]
         console.print(f"\n[{p}][bold]● Argos Commands[/bold][/{p}]")
         cmds = [
-            ("/server", "Interactive server & environment manager (↑/↓ to select, [a] add, [r] rename)"),
-            ("/theme [name]", "Interactive theme picker with live real-time preview (↑/↓ to preview)"),
-            ("/model [name]", "Select model for agent (gemini-2.5-pro, claude-3-7-sonnet...)"),
+            ("/server", "Interactive server manager (↑/↓ to select, [a] add, [r] rename)"),
+            ("/files, /ls", "List files and directories in remote workspace (zero tokens)"),
+            ("/terminal, /sh", "Attach raw interactive terminal to active session (Ctrl+] to detach)"),
+            ("/model [name]", "Select model for agent (gemini-3.8-flash, claude-3-7-sonnet...)"),
             ("/effort [level]", "Select reasoning & thinking effort (high, medium, low, off)"),
             ("/proxy [url|off]", "Configure HTTP/HTTPS proxy (e.g. http://127.0.0.1:7897 or off)"),
-            ("/tasks, /ls", "List all running sessions and active context"),
+            ("/tasks", "List all running sessions and active context"),
             ("/switch <name|#>", "Switch active session context"),
-            ("/terminal, /sh", "Attach raw terminal to active session (Ctrl+] to detach)"),
             ("/agent <name>", "Switch agent engine (agy, claude, codex, shell)"),
             ("/status", "Show remote CPU, GPU, memory and load status"),
             ("/broadcast <cmd>", "Broadcast shell command to all sessions"),
+            ("/theme [name]", "Interactive theme picker with live real-time preview (↑/↓ to preview)"),
             ("/close [name|#]", "Close a running session"),
             ("/config", "Show config file path and default settings"),
             ("/clear", "Clear screen and refresh dashboard"),
@@ -590,28 +649,12 @@ class AgentCliApp:
         is_local = server_info.get("is_local", False)
 
         if is_local:
-            default_dir = server_info.get("default_dir") or os.getcwd()
-            try:
-                work_dir = input(f"› Local directory [{default_dir}]: ").strip() or default_dir
-            except (KeyboardInterrupt, EOFError):
-                return
+            work_dir = server_info.get("default_dir") or os.getcwd()
         else:
-            default_dir = server_info.get("default_dir") or "/workspace"
-            try:
-                work_dir = input(f"› Remote directory [{default_dir}]: ").strip() or default_dir
-            except (KeyboardInterrupt, EOFError):
-                return
+            work_dir = server_info.get("default_dir") or "/data/workspace"
 
-        # Agent engine choice
-        default_agent = self.config.get_settings().get("default_agent", "agy")
-        console.print(f"› Agent engine: [1] agy  [2] claude  [3] codex  [4] shell  (default: {default_agent})")
-        try:
-            agent_pick = input("› Pick [1]: ").strip() or "1"
-        except (KeyboardInterrupt, EOFError):
-            return
-        agent_map = {"1": "agy", "2": "claude", "3": "codex", "4": "shell"}
-        agent_type = agent_map.get(agent_pick, default_agent)
-
+        # Use configured default agent without tedious questionnaire
+        agent_type = self.config.get_settings().get("default_agent", "agy")
         task_name = server_info.get("name") or (os.path.basename(work_dir.rstrip("/\\")) or "task")
 
         # Build startup command with model and effort flags
@@ -666,12 +709,44 @@ class AgentCliApp:
         s = self.theme["success"]
         a = self.theme["accent"]
         d = self.theme["dim"]
+        txt = self.theme.get("text", "#ffffff")
+
+        # Automatically fetch workspace files snapshot so user sees their project layout
+        files_line = ""
+        try:
+            if session.session_type == "remote_ssh" and hasattr(session.backend, "list_sftp_files"):
+                entries = session.backend.list_sftp_files(work_dir)
+            else:
+                entries = [{"name": f, "is_dir": os.path.isdir(os.path.join(work_dir, f))} for f in os.listdir(work_dir)]
+
+            if entries and not (len(entries) == 1 and "error" in entries[0]):
+                dirs = [e["name"] + "/" for e in entries if e.get("is_dir")][:5]
+                files = [e["name"] for e in entries if not e.get("is_dir")][:6]
+                d_str = " ".join(dirs)
+                f_str = " ".join(files)
+                files_line = f"  [{a}]Workspace Files:[/{a}] [{txt}]{d_str} {f_str}[/{txt}] [{d}]({len(entries)} items · type /files to view all)[/{d}]\n"
+        except Exception:
+            pass
 
         console.clear()
         console.print(self.render_header())
-        console.print(f"[{s}][bold]● Connected to {task_name}[/bold] [dim]({session.session_type})[/dim][/{s}]")
-        console.print(f"[{d}]● Working directory: [{p}]{work_dir}[/{p}] | Agent: [{a}]{agent_type}[/{a}] (model: {model_name}, effort: {effort_level})[/{d}]")
-        console.print(f"[{d}]● Type natural language prompts to run, or [{a}]/sh[/{a}] to enter interactive terminal.[/{d}]\n")
+
+        srv_host = server_info.get("host", "local")
+        srv_user = server_info.get("user") or server_info.get("username") or "root"
+        srv_str = f"{srv_user}@{srv_host}:{server_info.get('port', 22)}" if not is_local else "local machine"
+        proxy_info = "127.0.0.1:[10808/7897] ➔ 7897 (SSH tunnel active)" if self.config.get_proxy() else "direct"
+
+        banner = (
+            f"[{s}][bold]● Connected: {task_name}[/bold][/{s}] [{d}]({session.session_type})[/{d}]\n\n"
+            f"  [{a}]Target:[/{a}]          [{txt}]{task_name}[/{txt}] [{d}]({srv_str})[/dim]\n"
+            f"  [{a}]Directory:[/{a}]       [{p}]{work_dir}[/{p}]\n"
+            f"{files_line}"
+            f"  [{a}]Engine:[/{a}]          [{txt}]{agent_type}[/{txt}] [{d}]({model_name}, effort: {effort_level})[/dim]\n"
+            f"  [{a}]Proxy Tunnel:[/{a}]    [{s}]{proxy_info}[/{s}]\n\n"
+            f"[{d}]Quick Actions: Type prompt to dispatch · [/][{a}]/files[/] [{d}]list files · [/][{a}]/sh[/] [{d}]terminal · [/][{a}]/status[/] [{d}]GPU status[/{d}]"
+        )
+        console.print(Panel(banner, border_style=s, padding=(0, 1)))
+        console.print()
 
     def _prompt_new_server(self):
         console.print(f"\n[{self.theme['primary']}][bold]● Add New Remote Server[/bold][/{self.theme['primary']}]")
@@ -736,6 +811,61 @@ class AgentCliApp:
                 console.print(f"[{self.theme['success']}]● Server '{target.get('name')}' removed.[/{self.theme['success']}]")
         except (KeyboardInterrupt, EOFError):
             pass
+
+    def action_list_files(self, arg=""):
+        session = self._get_active_session()
+        if not session:
+            console.print(f"[{self.theme['warning']}]● No active session. Type /server to connect.[/{self.theme['warning']}]")
+            return
+
+        target_dir = arg.strip() or session.remote_dir or "/"
+        console.print(f"● Workspace [{self.theme['primary']}]{target_dir}[/{self.theme['primary']}] ({session.name}):")
+
+        entries = []
+        if session.session_type == "remote_ssh" and hasattr(session.backend, "list_sftp_files"):
+            entries = session.backend.list_sftp_files(target_dir)
+        else:
+            try:
+                local_dir = target_dir if os.path.isabs(target_dir) else os.path.join(os.getcwd(), target_dir)
+                for fname in os.listdir(local_dir):
+                    fpath = os.path.join(local_dir, fname)
+                    is_d = os.path.isdir(fpath)
+                    sz = os.path.getsize(fpath) if not is_d else 0
+                    mtime = os.path.getmtime(fpath)
+                    entries.append({"name": fname, "is_dir": is_d, "size": sz, "mtime": mtime})
+                entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+            except Exception as e:
+                entries = [{"error": str(e)}]
+
+        if not entries or (len(entries) == 1 and "error" in entries[0]):
+            err = entries[0].get("error", "Empty directory or cannot access") if entries else "Empty"
+            console.print(f"[{self.theme['dim']}]  ({err})[/{self.theme['dim']}]\n")
+            return
+
+        p = self.theme["primary"]
+        table = Table(border_style=p, show_header=True, header_style=f"{p} bold")
+        table.add_column("Type", width=6, style="cyan")
+        table.add_column("Name", style="white")
+        table.add_column("Size", justify="right", style="green")
+
+        dirs_cnt = sum(1 for e in entries if e.get("is_dir"))
+        files_cnt = len(entries) - dirs_cnt
+
+        for e in entries[:40]:
+            if e.get("is_dir"):
+                table.add_row("DIR", f"[bold cyan]{e['name']}/[/bold cyan]", "-")
+            else:
+                sz = e.get("size", 0)
+                if sz > 1024 * 1024:
+                    sz_str = f"{round(sz / (1024*1024), 1)} MB"
+                elif sz > 1024:
+                    sz_str = f"{round(sz / 1024, 1)} KB"
+                else:
+                    sz_str = f"{sz} B"
+                table.add_row("FILE", e['name'], sz_str)
+
+        console.print(table)
+        console.print(f"[{self.theme['dim']}]  Summary: {dirs_cnt} directories, {files_cnt} files (showing up to 40)[/{self.theme['dim']}]\n")
 
     def action_list_tasks(self):
         sessions = list(self.session_mgr.sessions.values())
@@ -817,6 +947,13 @@ class AgentCliApp:
         try:
             if sys.platform == "win32":
                 import msvcrt
+                # Drain residual input buffer
+                while msvcrt.kbhit():
+                    try:
+                        msvcrt.getch()
+                    except Exception:
+                        break
+
                 while not stop_event.is_set() and session.status == "running":
                     if msvcrt.kbhit():
                         ch = msvcrt.getch()
@@ -825,7 +962,7 @@ class AgentCliApp:
                             break
                         # Handle Windows special / arrow keys (0x00 or 0xe0 prefix)
                         if ch in (b'\x00', b'\xe0'):
-                            ch2 = msvcrt.getch()
+                            ch2 = msvcrt.getch() if msvcrt.kbhit() else b''
                             arrow_map = {
                                 b'H': b'\x1b[A',  # Up
                                 b'P': b'\x1b[B',  # Down
@@ -843,7 +980,7 @@ class AgentCliApp:
                             except Exception:
                                 pass
                     else:
-                        time.sleep(0.01)
+                        time.sleep(0.005)
             else:
                 import select
                 while not stop_event.is_set() and session.status == "running":
@@ -940,7 +1077,7 @@ class AgentCliApp:
         console.print(f"  Config file:     {self.config.config_path}")
         console.print(f"  Current theme:   {self.theme['name']} ({self.theme_id})")
         console.print(f"  Default agent:   {s.get('default_agent', 'agy')}")
-        console.print(f"  Default model:   {s.get('default_model', 'gemini-2.5-pro')}")
+        console.print(f"  Default model:   {s.get('default_model', 'gemini-3.8-flash')}")
         console.print(f"  Thinking effort: {s.get('thinking_effort', 'high')}")
         console.print(f"  Proxy:           {self.config.get_proxy() or 'None (direct)'}")
         console.print(f"  Servers saved:   {len(self.config.get_servers())}\n")
@@ -952,19 +1089,35 @@ class AgentCliApp:
             return
 
         agent = (session.command or "agy").lower()
+        a = self.theme["accent"]
+        d = self.theme["dim"]
 
-        if agent in ("agy", "claude"):
-            session.backend.write(prompt + "\n")
-            console.print(f"[{self.theme['dim']}]● Sent to {agent}. Type [{self.theme['accent']}][bold]/sh[/bold][/{self.theme['accent']}] to enter interactive terminal and observe live output.[/{self.theme['dim']}]")
-        elif agent == "shell":
-            session.backend.write(prompt + "\n")
-            time.sleep(0.3)
-            recent = session.scrollback[-2000:]
-            if recent:
-                console.print(recent.strip())
-        else:
-            session.backend.write(prompt + "\n")
-            console.print(f"[{self.theme['dim']}]● Prompt dispatched. Type [{self.theme['accent']}][bold]/sh[/bold][/{self.theme['accent']}] to attach terminal.[/{self.theme['dim']}]")
+        console.print(f"[{a}]● Dispatched to {agent} in [{session.name}]...[/{a}] [{d}](Type /sh to interact directly)[/{d}]")
+        session.backend.write(prompt + "\n")
+
+        # Stream output directly to user for a few seconds so user sees response live
+        printed = [0]
+        def on_stream_output(chunk):
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+            printed[0] += len(chunk)
+
+        session.output_listeners.add(on_stream_output)
+        try:
+            t0 = time.time()
+            last_change = time.time()
+            last_cnt = 0
+            while time.time() - t0 < 6:
+                time.sleep(0.08)
+                if printed[0] != last_cnt:
+                    last_cnt = printed[0]
+                    last_change = time.time()
+                elif printed[0] > 0 and (time.time() - last_change > 1.2):
+                    break
+        finally:
+            if on_stream_output in session.output_listeners:
+                session.output_listeners.remove(on_stream_output)
+            console.print()
 
 
 def main():
