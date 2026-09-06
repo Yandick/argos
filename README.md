@@ -1,84 +1,117 @@
-# ServerHelper (shmux) ⚡
+<div align="center">
 
-> **轻量级、低延迟、面向 Coding Agent（Claude Code / agy / Codex / LLM）的远程多任务并发终端工作台**
-> 灵感源自 OpenCode 与 Pi 的交互美学，专为解决“多任务并发管理难、多个 Agent 终端窗口杂乱、内存占用高”而设计。
+<img src="assets/logo.png" width="128" height="128" alt="ServerHelper logo" />
 
----
+# ⚡ ServerHelper · Argos
 
-## 🌟 为什么需要 ServerHelper？
+**A lightweight, low-latency remote multi-task terminal workbench for Coding Agents.**
 
-当我们在本地使用 Coding Agent（如 `claude code`、Google `agy` 或基于 API 的自定义 Agent）连接远程服务器处理多个任务时（例如：一个做推荐系统 `rec` 数据处理，一个做对齐安全评测 `safety`，一个跑持续测试），传统的做法通常是：
-1. 本地同时开启 3~5 个终端黑框，窗口切换繁琐且容易输错目录或误关任务；
-2. 或者是远程配置一套沉重的 Web/GUI 方案，消耗大量内存；
-3. 本地与远程 Agent 缺乏统一的配置中心与上下文调度。
+Manage Claude Code · Antigravity (`agy`) · Codex / API agents · native shells — all from one terminal, across many servers, with tasks that keep running in the background.
 
-**ServerHelper** 采用纯终端 CLI 交互，内存仅占用约 **15MB ~ 35MB**，秒级极速启动。它支持通过单个统一终端管理所有远程与本地任务，任务在后台守护进程中持续运行，并提供类似 OpenCode / Pi 的斜杠命令体验与 Agent 交互桥梁。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](./pyproject.toml)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#-install--quick-start)
+[![Memory](https://img.shields.io/badge/RAM-15--35MB-brightgreen.svg)](#-why-serverhelper)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-success.svg)](#-contributing)
 
----
+<strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 
-## ✨ 核心特性
+*Inspired by the interaction aesthetics of OpenCode and Pi.*
 
-- 🎯 **OpenCode & Pi 风格的交互式 Agent CLI**：
-  - 在终端输入 `server-helper` 即可进入沉浸式工作台。
-  - 支持快捷斜杠命令（`/connect`, `/tasks`, `/switch`, `/terminal`, `/agent`, `/status`, `/broadcast` 等）与 Tab 自动补全。
-  - 直接输入自然语言需求，无缝分发给指定 Agent 自动化执行。
-
-- 🤖 **支持多 Agent 灵活接入**：
-  - **Claude Code (`claude`)**：无缝拉起本地或远程 Claude Code 交互会话。
-  - **Antigravity CLI (`agy`)**：集成 Google Antigravity Agent 执行工作流。
-  - **OpenAI / Codex / DeepSeek API (`codex`)**：内置轻量级自主 Agent Loop，支持自动调用远程工具（`run_command`, `read_file`, `edit_file`, `list_directory` 等）。
-  - **原生 Shell (`shell`)**：快速挂载原生交互式 SSH / 本地 PTY 终端。
-
-- ⚡ **极致轻量与超低延迟**：
-  - 启动内存仅 **15MB - 35MB**，极低 CPU 占用。
-  - SSH 连接针对交互延迟深度优化（开启 `TCP_NODELAY`，禁用压缩，优化套接字缓冲区读取）。
-
-- 🔄 **会话持久化与后台守护 (Daemon)**：
-  - 所有任务在独立后台线程中运行，即使退出当前 CLI 终端，远程训练或评测任务依然在后台持续执行。
-  - 重新输入 `server-helper` 并使用 `/switch <任务名>` 即可秒级重新挂载接管。
-
-- 📢 **多任务全量广播 (Broadcast)**：
-  - 一键向所有运行中的并发任务同时下发监控指令（例如 `/broadcast nvidia-smi` 或 `/broadcast git pull`）。
-
-- 📦 **标准开源可发布规范**：
-  - 符合现代 Python 打包标准（`pyproject.toml`、PEP 621），支持 `pip install -e .` 安装后全局直接使用 `server-helper` 或 `shmux` 别名。
+</div>
 
 ---
 
-## 📦 安装与快速开始
+## 🌟 Why ServerHelper?
 
-### 方式一：克隆仓库与本地开发安装（推荐）
+When you drive Coding Agents (`claude`, `agy`, or API-based custom agents) against remote servers across several tasks at once — one doing `rec` data processing, one running `safety` evals, one on continuous tests — the usual workflows hurt:
+
+1. **3–5 local terminal windows** open at once; switching is tedious and it's easy to `cd` into the wrong place or kill the wrong task.
+2. **Heavy remote web/GUI stacks** eat a lot of memory on the server.
+3. **No unified config or context scheduling** between your local and remote agents.
+
+ServerHelper is a **pure terminal CLI** that uses only **~15–35 MB** of RAM and starts in under a second. One unified terminal manages every remote and local task; tasks persist in a background daemon; and you get an OpenCode / Pi-style slash-command experience with an agent bridge.
+
+---
+
+## ✨ Features
+
+- 🎯 **OpenCode & Pi-style interactive Agent CLI**
+  - Run `server-helper` (or `shmux` / `argos`) to enter an immersive workbench.
+  - Slash commands (`/connect`, `/tasks`, `/switch`, `/terminal`, `/agent`, `/status`, `/broadcast`, `/lang`, …) with **Tab auto-completion** and arrow-key navigation.
+  - Type plain natural language to dispatch work straight to the selected agent.
+
+- 🌐 **Bilingual UI (English / 中文)** — switch the whole interface with `/lang` in the CLI or the 🌐 button in the Web console. Choice is persisted; it only affects UI text, never the agent's reply language.
+
+- 🤖 **Flexible multi-agent support**
+  - **Claude Code (`claude`)** — launch local or remote interactive sessions.
+  - **Antigravity CLI (`agy`)** — Google Antigravity agent workflows.
+  - **OpenAI / Codex / DeepSeek API (`codex`)** — a built-in lightweight autonomous agent loop with remote tools (`run_command`, `read_file`, `write_file`, `edit_file`, `list_directory`, `check_gpu_and_system`).
+  - **Native shell (`shell`)** — mount a raw interactive SSH / local PTY terminal.
+
+- ⚡ **Extremely light & low-latency**
+  - **15–35 MB** startup footprint, minimal CPU.
+  - SSH tuned for interactive latency: `TCP_NODELAY` on, compression off, optimized socket reads.
+
+- 🔄 **Persistent sessions & background daemon**
+  - Tasks run in independent background threads; exit the CLI and your remote training/eval keeps running.
+  - Re-run `server-helper` and `/switch <task>` to re-attach in seconds.
+
+- 📢 **Multi-task broadcast** — send one command to all running tasks at once (`/broadcast nvidia-smi`, `/broadcast git pull`).
+
+- 🖥️ **Optional Web console** — a browser dashboard with live xterm terminals, an agent chat panel, and an SFTP file drawer.
+
+- 📦 **Standard, publishable packaging** — modern `pyproject.toml` (PEP 621); `pip install -e .` gives you global `server-helper` / `shmux` / `argos` commands.
+
+---
+
+## 📦 Install & Quick Start
+
+### Option 1 — Clone & local dev install (recommended)
 
 ```bash
-# 克隆仓库
 git clone https://github.com/Yandick/argos.git
 cd argos
 
-# 使用 uv（推荐，极速）
+# With uv (recommended, fastest)
 uv venv
 uv pip install -e .
 
-# 或者使用标准 venv
+# Or with a standard venv
 python -m venv .venv
+# Windows
 .\.venv\Scripts\pip install -e .
+# Linux / macOS
+./.venv/bin/pip install -e .
 ```
 
-### 方式二：一键运行（Windows）
+### Option 2 — One-click run (Windows)
 
-直接双击 [start.bat](file:///D:/server-helper/start.bat) 或在终端执行：
+Double-click [`start.bat`](./start.bat), or run:
+
 ```powershell
 .\start.ps1
 ```
 
+### Option 3 — One-line installer
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/Yandick/argos/main/install.sh | bash
+```
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/Yandick/argos/main/install.ps1 | iex
+```
+
 ---
 
-## ⚙️ 配置文件说明 (`setting.json`)
+## ⚙️ Configuration (`setting.json`)
 
-ServerHelper 优先读取工作目录下的 `./setting.json`，若未找到则自动使用 `~/.server-helper/setting.json`。
+ServerHelper reads `./setting.json` from the working directory first, then falls back to `~/.server-helper/setting.json`. Copy [`setting.example.json`](./setting.example.json) to get started.
 
-完整配置示例如下：
-
-```json
+```jsonc
 {
   "servers": [
     {
@@ -86,140 +119,129 @@ ServerHelper 优先读取工作目录下的 `./setting.json`，若未找到则�
       "host": "192.168.1.100",
       "port": 22,
       "user": "ubuntu",
-      "auth": "key",
-      "key_path": "C:/Users/username/.ssh/id_rsa",
-      "default_dir": "/workspace"
+      "auth": "key",                 // "key" or "password"
+      "key_path": "~/.ssh/id_rsa",
+      "default_dir": "/workspace",
+      "remote_proxy_port": 10808     // optional SSH reverse-tunnel port
     }
   ],
   "agents": {
     "default": "claude",
-    "claude": {
-      "name": "Claude Code",
-      "cmd": "claude",
-      "type": "cli"
-    },
-    "agy": {
-      "name": "Antigravity CLI",
-      "cmd": "agy",
-      "type": "cli"
-    },
-    "codex": {
-      "name": "OpenAI / Codex API",
-      "api_base": "https://api.deepseek.com/v1",
-      "api_key": "sk-your-api-key-here",
-      "model": "deepseek-chat",
-      "type": "api"
-    }
+    "claude": { "name": "Claude Code", "cmd": "claude", "type": "cli" },
+    "agy":    { "name": "Antigravity CLI", "cmd": "agy", "type": "cli" },
+    "codex":  { "name": "OpenAI / Codex API", "api_base": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-chat", "type": "api" }
   },
   "settings": {
-    "language": "en",
-    "theme": "dark",
+    "language": "en",                // "en" | "zh"
+    "theme": "catppuccin",
     "auto_reconnect": true,
     "keepalive_interval": 15
   }
 }
 ```
 
-> **界面语言 / UI Language**：`settings.language` 支持 `"en"`（English，默认）与 `"zh"`（中文）。在交互式 CLI 中可直接用 `/lang en` 或 `/lang zh` 切换（不带参数则一键互换），Web 控制台左下角有 🌐 Language 切换按钮。该设置只影响界面文案，不会改变 Agent 的回复语言。
+> 🔒 **Security note:** `setting.json` may contain SSH passwords and is **git-ignored** by default. Never commit it. If a credential is ever leaked, rotate it immediately.
 
 ---
 
-## 🎮 CLI 交互体验 (OpenCode / Pi 风格)
+## 🎮 CLI Experience (OpenCode / Pi style)
 
-终端运行：
 ```bash
-server-helper
-# 或者使用简短别名
-shmux
+server-helper      # or: shmux  /  argos
 ```
-
-进入交互终端后，即可通过斜杠指令（支持 Tab 自动补全）操作多任务：
 
 ```text
- ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ 
- ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗
- ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝
- ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗
- ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║
- ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
- ⚡ ServerHelper Agent CLI v0.2.0 | OpenCode / Pi Style
- 输入 /help 查看指令列表，输入 /connect 连接远程服务器
+  ▄▀█ █▀█ █▀▀ █▀█ █▀   argos  v0.3.0 · autonomous coding agent orchestrator
+  █▀█ █▀▄ █▄█ █▄█ ▄█   Ἄργος Πανόπτης · multi-server remote workspace harness
 
-server-helper > /help
+  Target:    Not connected (type /server to select environment)  idle
+  Workspace: /
+  Engine:    agy · gemini-3.8-flash (effort: high)
+  Proxy:     http://127.0.0.1:7897
+  Theme:     catppuccin
+
+Shortcuts: /server target · /files files · /sh terminal · /model models · /help help
 ```
 
-### 常用指令表
+### Command reference
 
-| 命令 | 别名 | 功能说明 | 示例 |
+| Command | Alias | Description | Example |
 | :--- | :--- | :--- | :--- |
-| `/connect` | `/c` | 交互式选择远程服务器与工作目录，快速建立新任务 | `/connect` |
-| `/tasks` | `/ls` | 查看当前所有运行中的任务及状态 | `/tasks` |
-| `/switch <名称>` | | 切换当前活跃工作区上下文 | `/switch safety-eval` |
-| `/terminal` | `/sh` | 进入当前任务的原生交互终端（按 `Ctrl+]` 随时脱离返回） | `/terminal` |
-| `/agent <类型>` | | 切换当前任务关联的 Agent 引擎（`claude`, `agy`, `codex`, `shell`） | `/agent agy` |
-| `/status` | | 查看当前服务器硬件监控（GPU 显存、CPU、内存）及 Git 状态 | `/status` |
-| `/broadcast <命令>`| `/b` | 向所有活跃并发任务同时广播执行指令 | `/broadcast nvidia-smi` |
-| `/close [名称]` | | 停止当前或指定的任务 | `/close rec-task` |
-| `/servers` | | 查看或管理已保存的远程服务器配置 | `/servers` |
-| `/config` | | 查看或检查当前 `setting.json` 状态 | `/config` |
-| `/lang` | | 切换界面语言（`en` / `zh`，不带参数则一键互换） | `/lang zh` |
-| `/clear` | | 清除当前终端屏幕 | `/clear` |
-| `/exit` | `/quit` | 退出 CLI 交互界面（**后台任务不受影响，继续稳定运行**） | `/exit` |
+| `/connect` | `/c` `/server` | Interactively pick a server & working dir, start a task | `/connect` |
+| `/tasks` | `/ls` | List all running tasks and their state | `/tasks` |
+| `/switch <name>` | `/sw` | Switch the active workspace context | `/switch safety-eval` |
+| `/terminal` | `/sh` | Enter the task's raw interactive terminal (`Ctrl+]` to detach) | `/terminal` |
+| `/agent <type>` | | Switch the task's agent engine (`claude`, `agy`, `codex`, `shell`) | `/agent agy` |
+| `/model <name>` | | Switch the active LLM model | `/model gemini-3.8-flash` |
+| `/effort <level>` | | Set reasoning effort (`high`/`medium`/`low`/`off`) | `/effort high` |
+| `/proxy <url\|off>` | | Configure HTTP proxy & SSH reverse tunnel | `/proxy http://127.0.0.1:7897` |
+| `/status` | | Show remote GPU / CPU / memory and Git status | `/status` |
+| `/broadcast <cmd>` | `/b` | Broadcast a command to all active tasks | `/broadcast nvidia-smi` |
+| `/theme <name>` | | Switch UI color theme (live preview) | `/theme tokyo-night` |
+| `/lang <en\|zh>` | | Switch interface language (no arg = toggle) | `/lang zh` |
+| `/close [name]` | `/stop` | Stop the current or a named task | `/close rec-task` |
+| `/config` | | Inspect current `setting.json` | `/config` |
+| `/clear` | | Clear screen & redraw the dashboard | `/clear` |
+| `/help` | | Full command & shortcut guide | `/help` |
+| `/exit` | `/quit` | Exit the CLI (**background tasks keep running**) | `/exit` |
 
-### 自然语言下发
+### Natural-language dispatch
 
-在选定活跃任务后，无需输入斜杠，直接在输入框中输入自然语言即可下发任务：
+With an active task selected, just type — no slash needed:
+
 ```text
-[gpu-node-1: /workspace/safety] server-helper > 检查当前目录下的评测日志，并排查 OOM 报错
+[gpu-node-1: /workspace/safety] argos › check the eval logs in this dir and trace the OOM error
 ```
 
 ---
 
-## 🖥️ 命令行非交互调用 (Subcommands)
-
-除了全功能交互式 CLI 之外，ServerHelper 还支持直接在脚本或命令行中单次调用：
+## 🖥️ Non-interactive Subcommands
 
 ```bash
-# 查看所有后台任务
-server-helper list
-
-# 启动新任务 (指定服务器、目录和 Agent)
+server-helper list                                   # list background tasks
 server-helper start safety --server gpu-node-1 --dir /workspace/safety --agent claude
-
-# 直接挂接到任务的终端
-server-helper attach safety
-
-# 向所有后台任务广播执行指令
-server-helper broadcast "nvidia-smi"
-
-# 停止任务
-server-helper stop safety
-
-# 管理远程服务器
-server-helper server list
+server-helper attach safety                          # attach to a task terminal
+server-helper broadcast "nvidia-smi"                 # broadcast to all tasks
+server-helper stop safety                            # stop a task
+server-helper server list                            # manage saved servers
 server-helper server add node-2 --host 192.168.1.101 --user ubuntu --auth key --key ~/.ssh/id_rsa --dir /workspace
-server-helper server rm node-2
-
-# 启动可选的 Web 浏览器版控制台
-server-helper web --port 8765
+server-helper web --port 8765                        # launch the Web console
 ```
 
 ---
 
-## 🧪 自动化测试验证
+## 🧪 Tests
 
-运行测试验证全链路指令与配置读取：
 ```bash
-python test_agent_cli.py
-```
-
-执行 Agent 仿真并发压测：
-```bash
-python test_agent_simulation.py
+python test_agent_cli.py          # end-to-end command & config checks
+python test_agent_simulation.py   # concurrent agent stress simulation
 ```
 
 ---
 
-## 📄 开源许可证
+## 🗺️ Roadmap
 
-本项目基于 MIT License 开源发布。
+- [ ] Unify the root modules and `src/server_helper/` into a single implementation
+- [ ] Optional keyring-backed credential storage
+- [ ] Token-based auth for the Web console
+- [ ] More themes & agent integrations
+
+---
+
+## 🤝 Contributing
+
+Issues and PRs are welcome. Please keep `setting.json` out of version control and add tests for new behavior.
+
+## 📄 License
+
+Released under the [MIT License](./LICENSE).
+
+---
+
+<div align="center">
+
+**English** · <a href="README.zh-CN.md">简体中文</a>
+
+Made with ⚡ for people running many agents on many servers.
+
+</div>

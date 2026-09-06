@@ -36,6 +36,8 @@
     "bin/",
     "src/",
     "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
     "pyproject.toml",
     "setting.example.json"
   ]
