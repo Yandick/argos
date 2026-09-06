@@ -148,7 +148,7 @@ def interactive_theme_picker(themes, current_theme_id):
             preview_content = (
                 f"[{p}][bold]● argos v0.3.0 · remote coding agent orchestrator[/bold][/{p}] [{a}]({cur_theme['name']})[/{a}]\n\n"
                 f"[{d}]Prompt Preview:[/{d}]\n"
-                f"[{p}]●[/{p}] [{s}]yhwu@202.38.247.29[/{s}]:[{d}]/data/yhwu[/{d}] [{a}](agy · gemini-2.5-pro)[/{a}] › [{txt}]帮我查看当前显卡状态并编写代码[/{txt}]\n\n"
+                f"[{p}]●[/{p}] [{s}]yhwu@202.38.247.29[/{s}]:[{d}]/data/yhwu[/{d}] [{a}](agy · gemini-3.8-flash)[/{a}] › [{txt}]帮我查看当前显卡状态并编写代码[/{txt}]\n\n"
                 f"[{d}]Tool & Agent Action Preview:[/{d}]\n"
                 f"[{a}]▸[/{a}] [{txt}]Executing:[/{txt}] [{p}]nvidia-smi --query-gpu=name,memory.used,memory.total[/{p}]\n"
                 f"[{s}]● NVIDIA A800-SXM4-80GB (Used: 4.2GB / 80.0GB, Temp: 38°C)[/{s}]\n"

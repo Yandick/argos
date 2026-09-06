@@ -9,15 +9,18 @@ import uuid
 DEFAULT_CONFIG = {
     "servers": [],
     "agents": {
-        "default": "claude",
+        "default": "agy",
         "claude": {
             "name": "Claude Code",
             "cmd": "claude",
+            "model": "claude-3-7-sonnet",
             "type": "cli"
         },
         "agy": {
             "name": "Antigravity CLI",
             "cmd": "agy",
+            "model": "gemini-3.8-flash",
+            "thinking_effort": "high",
             "type": "cli"
         },
         "codex": {
@@ -29,8 +32,13 @@ DEFAULT_CONFIG = {
         }
     },
     "settings": {
-        "theme": "dark",
-        "default_agent": "claude"
+        "theme": "catppuccin",
+        "default_agent": "agy",
+        "default_model": "gemini-3.8-flash",
+        "thinking_effort": "high",
+        "proxy": "http://127.0.0.1:7897",
+        "auto_reconnect": True,
+        "keepalive_interval": 15
     }
 }
 
@@ -48,6 +56,11 @@ class Config:
         local_file = os.path.join(os.getcwd(), "setting.json")
         if os.path.isfile(local_file):
             return local_file
+        # Check project root directory
+        proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        proj_file = os.path.join(proj_root, "setting.json")
+        if os.path.isfile(proj_file):
+            return proj_file
         # Fallback to home dir
         home_dir = os.path.expanduser(os.environ.get("SERVER_HELPER_HOME", "~/.server-helper"))
         os.makedirs(home_dir, exist_ok=True)
@@ -63,6 +76,16 @@ class Config:
                 for k, v in DEFAULT_CONFIG.items():
                     if k not in data:
                         data[k] = v
+
+                # Auto-migrate outdated model defaults
+                settings = data.setdefault("settings", {})
+                if settings.get("default_model") in ("gemini-2.5-pro", "gemini-3.8-pro", None):
+                    settings["default_model"] = "gemini-3.8-flash"
+                agents = data.setdefault("agents", {})
+                if agents.get("agy", {}).get("model") in ("gemini-2.5-pro", "gemini-3.8-pro", None):
+                    if "agy" in agents:
+                        agents["agy"]["model"] = "gemini-3.8-flash"
+
                 return data
         except Exception:
             return DEFAULT_CONFIG
@@ -73,6 +96,12 @@ class Config:
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+            # Also keep global home setting.json in sync
+            home_path = os.path.expanduser("~/.server-helper/setting.json")
+            if os.path.abspath(self.config_path) != os.path.abspath(home_path):
+                os.makedirs(os.path.dirname(home_path), exist_ok=True)
+                with open(home_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"[Config] 保存配置失败: {e}")
 
