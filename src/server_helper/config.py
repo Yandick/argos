@@ -75,11 +75,27 @@ class Config:
         except Exception as e:
             print(f"[Config] 保存配置失败: {e}")
 
+    def _normalize_server(self, s):
+        if not isinstance(s, dict):
+            return s
+        if "id" not in s:
+            s["id"] = "srv-" + str(uuid.uuid4())[:8]
+        if "auth_type" not in s and "auth" in s:
+            s["auth_type"] = s["auth"]
+        if "auth" not in s and "auth_type" in s:
+            s["auth"] = s["auth_type"]
+        if "key_path" not in s and "key" in s:
+            s["key_path"] = s["key"]
+        if "password" not in s and "pass" in s:
+            s["password"] = s["pass"]
+        return s
+
     def get_servers(self):
-        return self.data.get("servers", [])
+        servers = self.data.get("servers", [])
+        return [self._normalize_server(s) for s in servers]
 
     def get_server(self, name_or_id):
-        for s in self.data.get("servers", []):
+        for s in self.get_servers():
             if s.get("id") == name_or_id or s.get("name") == name_or_id:
                 return s
         return None

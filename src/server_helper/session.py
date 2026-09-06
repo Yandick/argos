@@ -30,13 +30,16 @@ class TaskSession:
         try:
             if self.server_info and self.server_info.get("host"):
                 # Remote SSH Session
+                auth_type = self.server_info.get("auth_type") or self.server_info.get("auth") or "key"
+                key_path = self.server_info.get("key_path") or self.server_info.get("key")
+                password = self.server_info.get("password") or self.server_info.get("pass")
                 backend = SSHClientWrapper(
                     host=self.server_info.get("host"),
-                    port=self.server_info.get("port", 22),
+                    port=int(self.server_info.get("port", 22)),
                     user=self.server_info.get("user", "root"),
-                    auth_type=self.server_info.get("auth_type", "key"),
-                    key_path=self.server_info.get("key_path"),
-                    password=self.server_info.get("password")
+                    auth_type=auth_type,
+                    key_path=key_path,
+                    password=password
                 )
                 backend.connect(cols=cols, rows=rows)
                 self.backend = backend

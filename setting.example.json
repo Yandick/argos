@@ -1,0 +1,47 @@
+{
+  "servers": [
+    {
+      "name": "gpu-lab-1",
+      "host": "192.168.1.100",
+      "port": 22,
+      "user": "ubuntu",
+      "auth": "password",
+      "password": "your_ssh_password_here",
+      "default_dir": "/workspace/rec"
+    },
+    {
+      "name": "safety-cluster",
+      "host": "10.0.0.12",
+      "port": 22,
+      "user": "root",
+      "auth": "key",
+      "key_path": "~/.ssh/id_rsa",
+      "default_dir": "/data/safety"
+    }
+  ],
+  "agents": {
+    "default": "claude",
+    "claude": {
+      "name": "Claude Code",
+      "cmd": "claude",
+      "type": "cli"
+    },
+    "agy": {
+      "name": "Antigravity CLI",
+      "cmd": "agy",
+      "type": "cli"
+    },
+    "codex": {
+      "name": "OpenAI / Codex API",
+      "api_base": "https://api.deepseek.com/v1",
+      "api_key": "sk-your-api-key",
+      "model": "deepseek-chat",
+      "type": "api"
+    }
+  },
+  "settings": {
+    "theme": "dark",
+    "auto_reconnect": true,
+    "keepalive_interval": 15
+  }
+}
