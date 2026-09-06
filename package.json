@@ -1,0 +1,42 @@
+{
+  "name": "argos-agent",
+  "version": "0.3.0",
+  "description": "Argos (Ἄργος) - Lightweight Multi-Agent & Remote SSH Orchestrator for Coding Agents (Claude Code, agy, codex)",
+  "main": "bin/argos.js",
+  "bin": {
+    "argos": "bin/argos.js",
+    "argos-sh": "bin/argos.js",
+    "server-helper": "bin/argos.js"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "claude-code",
+    "agy",
+    "codex",
+    "ssh",
+    "orchestrator",
+    "cli"
+  ],
+  "author": "Argos Developers",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-repo/argos-agent"
+  },
+  "bugs": {
+    "url": "https://github.com/your-repo/argos-agent/issues"
+  },
+  "homepage": "https://github.com/your-repo/argos-agent#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "pyproject.toml",
+    "setting.json"
+  ]
+}

@@ -325,8 +325,8 @@ def cmd_dashboard():
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="server-helper",
-        description="ServerHelper - Lightweight Multi-Agent & Remote SSH Orchestrator (Claude Code, agy, codex)"
+        prog="argos",
+        description="Argos (Ἄργος) - Lightweight Multi-Agent & Remote SSH Orchestrator (Claude Code, agy, codex)"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="子命令")

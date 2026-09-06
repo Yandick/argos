@@ -53,13 +53,13 @@ pt_style = Style.from_dict({
 })
 
 BANNER = r"""
- [bold cyan]███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ [/bold cyan]
- [bold cyan]██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗[/bold cyan]
- [bold cyan]███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝[/bold cyan]
- [bold cyan]╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗[/bold cyan]
- [bold cyan]███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║[/bold cyan]
- [bold cyan]╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝[/bold cyan]
- [dim]⚡ ServerHelper Agent CLI v0.2.0 | OpenCode / Pi Style[/dim]
+ [bold cyan]  █████╗ ██████╗  ██████╗  ██████╗ ███████╗[/bold cyan]
+ [bold cyan] ██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗██╔════╝[/bold cyan]
+ [bold cyan] ███████║██████╔╝██║  ███╗██║   ██║███████╗[/bold cyan]
+ [bold cyan] ██╔══██║██╔══██╗██║   ██║██║   ██║╚════██║[/bold cyan]
+ [bold cyan] ██║  ██║██║  ██║╚██████╔╝╚██████╔╝███████║[/bold cyan]
+ [bold cyan] ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝[/bold cyan]
+ [dim]⚡ [bold]ARGOS[/bold] (Ἄργος) v0.3.0 | All-Seeing Multi-Agent Remote Orchestrator[/dim]
  [dim]输入 [bold yellow]/help[/bold yellow] 查看指令列表，输入 [bold yellow]/connect[/bold yellow] 连接远程服务器[/dim]
 """
 
