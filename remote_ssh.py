@@ -92,6 +92,58 @@ class SSHSession:
                     except Exception:
                         pass
 
+                # Automatically establish reverse port forward for local proxy (e.g. 7897)
+                try:
+                    from server_helper.config import Config
+                    from urllib.parse import urlparse
+                    proxy_url = Config().get_proxy()
+                    if proxy_url and "://" in proxy_url:
+                        parsed = urlparse(proxy_url)
+                        local_p = parsed.port or 7897
+                        local_h = parsed.hostname or "127.0.0.1"
+
+                        def make_proxy_forwarder(l_h, l_p):
+                            def handler(chan, origin, server):
+                                try:
+                                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    sock.connect((l_h, l_p))
+                                    def c2s():
+                                        try:
+                                            while True:
+                                                d = chan.recv(4096)
+                                                if not d: break
+                                                sock.sendall(d)
+                                        except Exception: pass
+                                        finally:
+                                            try: sock.close()
+                                            except Exception: pass
+                                            try: chan.close()
+                                            except Exception: pass
+                                    def s2c():
+                                        try:
+                                            while True:
+                                                d = sock.recv(4096)
+                                                if not d: break
+                                                chan.sendall(d)
+                                        except Exception: pass
+                                        finally:
+                                            try: sock.close()
+                                            except Exception: pass
+                                            try: chan.close()
+                                            except Exception: pass
+                                    threading.Thread(target=c2s, daemon=True).start()
+                                    threading.Thread(target=s2c, daemon=True).start()
+                                except Exception:
+                                    try: chan.close()
+                                    except Exception: pass
+                            return handler
+
+                        transport.request_port_forward("127.0.0.1", local_p, make_proxy_forwarder(local_h, local_p))
+                        self._emit(f"\x1b[35m[Argos Proxy]\x1b[0m 已自动建立反向代理隧道: 远程 127.0.0.1:{local_p} ➔ 本地 {local_h}:{local_p}\r\n")
+                except Exception:
+                    pass
+
+
             # Open interactive shell channel
             self.channel = self.client.invoke_shell(term="xterm-256color", width=cols, height=rows)
             self.channel.settimeout(0.01)

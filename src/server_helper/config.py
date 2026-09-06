@@ -39,6 +39,7 @@ class Config:
     def __init__(self, config_path=None):
         self.config_path = self._resolve_path(config_path)
         self.data = self._load()
+        self._apply_proxy()
 
     def _resolve_path(self, custom_path=None):
         if custom_path and os.path.exists(custom_path):
@@ -223,3 +224,26 @@ class Config:
             agents["agy"]["thinking_effort"] = effort
         self._save()
         return effort
+
+    def get_proxy(self):
+        settings = self.get_settings()
+        return settings.get("proxy") or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+
+    def set_proxy(self, proxy_url):
+        proxy_url = (proxy_url or "").strip()
+        if proxy_url.lower() in ("off", "none", "disable", "no", "0"):
+            proxy_url = ""
+        self.update_settings({"proxy": proxy_url})
+        self._apply_proxy(proxy_url)
+        return proxy_url
+
+    def _apply_proxy(self, proxy_url=None):
+        if proxy_url is None:
+            proxy_url = self.get_proxy()
+        if proxy_url:
+            for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
+                os.environ[k] = proxy_url
+        else:
+            for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
+                os.environ.pop(k, None)
+

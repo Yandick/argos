@@ -55,6 +55,7 @@ SLASH_COMMANDS = [
     "/model",
     "/effort",
     "/thinking",
+    "/proxy",
     "/tasks",
     "/switch",
     "/terminal",
@@ -151,14 +152,17 @@ class AgentCliApp:
             status_tag = f"[{d}]idle[/{d}]"
 
         effort = self.config.get_thinking_effort()
+        proxy = self.config.get_proxy()
+        proxy_str = f"[{s}]{proxy}[/{s}]" if proxy else f"[{d}]direct (no proxy)[/{d}]"
 
         card = (
             f"[{p}][bold]● argos[/bold][/{p}] [{d}]v0.3.0 · AI agent remote multi-task orchestrator[/{d}]\n\n"
             f"  [{a}]Target:[/{a}]    [{txt}]{srv_str}[/{txt}] {status_tag}\n"
             f"  [{a}]Workspace:[/{a}] [{p}]{rdir}[/{p}]\n"
             f"  [{a}]Engine:[/{a}]    [{txt}]{agent_str}[/{txt}] [{d}](effort: {effort})[/{d}]\n"
+            f"  [{a}]Proxy:[/{a}]     {proxy_str}\n"
             f"  [{a}]Theme:[/{a}]     [{txt}]{t_name}[/{txt}] {swatch}\n\n"
-            f"[{d}]Shortcuts: [/][{a}]/server[/] [{d}]switch target[dim] · [/][{a}]/model[/] [{d}]models[dim] · [/][{a}]/effort[/] [{d}]reasoning[dim] · [/][{a}]/theme[/] [{d}]themes[dim] · [/][{a}]/sh[/] [{d}]terminal[dim] · [/][{a}]/help[/] [{d}]help[dim]"
+            f"[{d}]Shortcuts: [/][{a}]/server[/] [{d}]target[dim] · [/][{a}]/model[/] [{d}]models[dim] · [/][{a}]/proxy[/] [{d}]proxy[dim] · [/][{a}]/effort[/] [{d}]effort[dim] · [/][{a}]/theme[/] [{d}]themes[dim] · [/][{a}]/sh[/] [{d}]terminal[dim] · [/][{a}]/help[/] [{d}]help[dim]"
         )
         return Panel(card, border_style=p, padding=(0, 1))
 
@@ -248,6 +252,9 @@ class AgentCliApp:
         elif cmd in ("/effort", "/thinking"):
             self.action_effort(arg)
 
+        elif cmd == "/proxy":
+            self.action_proxy(arg)
+
         elif cmd in ("/tasks", "/sessions", "/ls"):
             self.action_list_tasks()
 
@@ -285,6 +292,7 @@ class AgentCliApp:
             ("/theme [name]", "Interactive theme picker with live real-time preview (↑/↓ to preview)"),
             ("/model [name]", "Select model for agent (gemini-2.5-pro, claude-3-7-sonnet...)"),
             ("/effort [level]", "Select reasoning & thinking effort (high, medium, low, off)"),
+            ("/proxy [url|off]", "Configure HTTP/HTTPS proxy (e.g. http://127.0.0.1:7897 or off)"),
             ("/tasks, /ls", "List all running sessions and active context"),
             ("/switch <name|#>", "Switch active session context"),
             ("/terminal, /sh", "Attach raw terminal to active session (Ctrl+] to detach)"),
@@ -401,6 +409,60 @@ class AgentCliApp:
         else:
             console.clear()
             console.print(self.render_header())
+
+    def action_proxy(self, arg=""):
+        arg = (arg or "").strip()
+        curr_proxy = self.config.get_proxy()
+
+        if arg:
+            if arg.lower() in ("off", "disable", "none", "no", "clear"):
+                self.config.set_proxy("")
+                console.clear()
+                console.print(self.render_header())
+                console.print(f"[{self.theme['warning']}]● Proxy disabled (direct connection mode).[/{self.theme['warning']}]\n")
+            else:
+                if not (arg.startswith("http://") or arg.startswith("https://") or arg.startswith("socks5://")):
+                    arg = "http://" + arg
+                new_p = self.config.set_proxy(arg)
+                console.clear()
+                console.print(self.render_header())
+                console.print(f"[{self.theme['success']}]● Proxy configured: [bold]{new_p}[/bold][/{self.theme['success']}]\n")
+            return
+
+        p = self.theme["primary"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        s = self.theme["success"]
+
+        console.print(f"\n[{p}][bold]● Proxy Configuration[/bold][/{p}]")
+        if curr_proxy:
+            console.print(f"  Current proxy: [{s}]{curr_proxy}[/{s}]")
+            console.print(f"  [{d}]Type new proxy URL, or 'off' to disable, or Enter to keep current.[/{d}]")
+        else:
+            console.print(f"  Current proxy: [{d}]direct (no proxy)[/{d}]")
+            console.print(f"  [{d}]Common local proxies: http://127.0.0.1:7897 (Clash Verge), http://127.0.0.1:7890 (Clash), http://127.0.0.1:10809 (v2rayN)[/{d}]")
+
+        try:
+            val = input(f"› Proxy URL [{curr_proxy or 'http://127.0.0.1:7897'}]: ").strip()
+            if not val:
+                if not curr_proxy:
+                    val = "http://127.0.0.1:7897"
+                else:
+                    return
+            if val.lower() in ("off", "disable", "none", "clear"):
+                self.config.set_proxy("")
+                console.clear()
+                console.print(self.render_header())
+                console.print(f"[{self.theme['warning']}]● Proxy disabled.[/{self.theme['warning']}]\n")
+            else:
+                if not (val.startswith("http://") or val.startswith("https://") or val.startswith("socks5://")):
+                    val = "http://" + val
+                new_p = self.config.set_proxy(val)
+                console.clear()
+                console.print(self.render_header())
+                console.print(f"[{self.theme['success']}]● Proxy saved: [bold]{new_p}[/bold] (active for all agent sessions)[/{self.theme['success']}]\n")
+        except (KeyboardInterrupt, EOFError):
+            return
 
     def action_servers(self, arg=""):
         arg_lower = (arg or "").strip().lower()
@@ -880,6 +942,7 @@ class AgentCliApp:
         console.print(f"  Default agent:   {s.get('default_agent', 'agy')}")
         console.print(f"  Default model:   {s.get('default_model', 'gemini-2.5-pro')}")
         console.print(f"  Thinking effort: {s.get('thinking_effort', 'high')}")
+        console.print(f"  Proxy:           {self.config.get_proxy() or 'None (direct)'}")
         console.print(f"  Servers saved:   {len(self.config.get_servers())}\n")
 
     def handle_natural_language_prompt(self, prompt):
