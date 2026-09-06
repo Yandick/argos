@@ -147,6 +147,29 @@ class Config:
             return True
         return False
 
+    def rename_server(self, old_name_or_id, new_name):
+        new_name = (new_name or "").strip()
+        if not new_name:
+            return False, "新名称不能为空"
+        servers = self.data.get("servers", [])
+        target = None
+        for s in servers:
+            if s.get("id") == old_name_or_id or s.get("name") == old_name_or_id:
+                target = s
+                break
+        if not target:
+            return False, f"未找到服务器: {old_name_or_id}"
+        target["name"] = new_name
+        self._save()
+        try:
+            g_path = os.path.expanduser("~/.server-helper/setting.json")
+            if os.path.isfile(g_path):
+                with open(g_path, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+        return True, new_name
+
     def get_agents(self):
         return self.data.get("agents", {})
 
@@ -160,4 +183,43 @@ class Config:
     def update_settings(self, new_settings):
         self.data["settings"].update(new_settings)
         self._save()
+        try:
+            g_path = os.path.expanduser("~/.server-helper/setting.json")
+            if os.path.isfile(g_path):
+                with open(g_path, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
         return self.data["settings"]
+
+    def get_model(self, agent_name=None):
+        settings = self.get_settings()
+        if agent_name:
+            ag = self.get_agent(agent_name)
+            if ag and ag.get("model"):
+                return ag.get("model")
+        return settings.get("default_model") or "gemini-2.5-pro"
+
+    def set_model(self, model_name, agent_name=None):
+        model_name = (model_name or "").strip()
+        if agent_name:
+            agents = self.get_agents()
+            if agent_name in agents:
+                agents[agent_name]["model"] = model_name
+        self.update_settings({"default_model": model_name})
+        return model_name
+
+    def get_thinking_effort(self):
+        settings = self.get_settings()
+        return settings.get("thinking_effort") or "high"
+
+    def set_thinking_effort(self, effort):
+        effort = (effort or "").lower().strip()
+        if effort not in ("low", "medium", "high", "off"):
+            effort = "high"
+        self.update_settings({"thinking_effort": effort})
+        agents = self.get_agents()
+        if "agy" in agents:
+            agents["agy"]["thinking_effort"] = effort
+        self._save()
+        return effort

@@ -2,6 +2,7 @@
 Argos (Ἄργος) CLI Interface
 Minimalist OpenCode & Pi aesthetic agent orchestrator.
 Runs in-process without secondary console popups or external daemons.
+Supports custom developer themes (/theme), model switching (/model), and reasoning effort tuning (/effort).
 """
 import os
 import sys
@@ -9,7 +10,6 @@ import time
 import shutil
 import threading
 from rich.console import Console
-from rich.text import Text
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -30,6 +30,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from server_helper.config import Config
+from server_helper.theme import get_theme, list_themes, render_swatch, get_prompt_toolkit_style
 from session_manager import SessionManager
 
 console = Console()
@@ -37,6 +38,12 @@ console = Console()
 SLASH_COMMANDS = [
     "/server",
     "/connect",
+    "/theme",
+    "/themes",
+    "/model",
+    "/models",
+    "/effort",
+    "/thinking",
     "/tasks",
     "/switch",
     "/terminal",
@@ -54,10 +61,14 @@ SLASH_COMMANDS = [
 
 completer = WordCompleter(SLASH_COMMANDS, ignore_case=True, sentence=True)
 
-HEADER = (
-    "[bold cyan]●[/bold cyan] [bold]argos[/bold] [dim]v0.3.0 · remote coding agent orchestrator[/dim]\n"
-    "[dim]Type [cyan]/server[/cyan] to switch context, [cyan]/help[/cyan] for commands[/dim]\n"
-)
+POPULAR_MODELS = [
+    "gemini-2.5-pro",
+    "claude-3-7-sonnet",
+    "claude-3-5-sonnet",
+    "deepseek-r1",
+    "deepseek-chat",
+    "gpt-4o"
+]
 
 
 class AgentCliApp:
@@ -68,6 +79,13 @@ class AgentCliApp:
         self.history_file = os.path.expanduser("~/.server-helper/cli_history")
         os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
 
+        # Load active theme
+        self.theme_id = self.config.get_settings().get("theme", "catppuccin")
+        self.theme = get_theme(self.theme_id)
+
+        self._init_prompt_session()
+
+    def _init_prompt_session(self):
         try:
             pt_out = create_output()
         except Exception:
@@ -78,12 +96,15 @@ class AgentCliApp:
         except Exception:
             pt_in = DummyInput()
 
+        pt_style = get_prompt_toolkit_style(self.theme)
+
         try:
             self.session_prompt = PromptSession(
                 history=FileHistory(self.history_file),
                 completer=completer,
                 output=pt_out,
-                input=pt_in
+                input=pt_in,
+                style=pt_style
             )
         except Exception:
             self.session_prompt = None
@@ -96,16 +117,29 @@ class AgentCliApp:
                 pass
         return input(prompt_text).strip()
 
+    def render_header(self):
+        p = self.theme["primary"]
+        d = self.theme["dim"]
+        a = self.theme["accent"]
+        t_name = self.theme["name"]
+        swatch = render_swatch(self.theme)
+        return (
+            f"[{p}]●[/{p}] [bold]argos[/bold] [{d}]v0.3.0 · remote coding agent orchestrator[/{d}] [{a}]({t_name})[/{a}] {swatch}\n"
+            f"[{d}]Type [{a}]/server[/{a}] to switch context, [{a}]/model[/{a}] for models, [{a}]/theme[/{a}] for themes, [{a}]/help[/{a}] for help[/{d}]\n"
+        )
+
     def run(self):
         console.clear()
-        console.print(HEADER)
+        console.print(self.render_header())
 
-        # Auto-connect or pre-select first server if configured
+        # Show configured servers
         servers = self.config.get_servers()
         if servers:
             s0 = servers[0]
-            console.print(f"[dim]● Configured remote server available: [bold cyan]{s0.get('name')}[/bold cyan] ({s0.get('user', 'root')}@{s0.get('host')}:{s0.get('port', 22)})[/dim]")
-            console.print("[dim]  Type [cyan]/server[/cyan] to connect, or type prompts directly.[/dim]\n")
+            d = self.theme["dim"]
+            c = self.theme["primary"]
+            console.print(f"[{d}]● Remote environment available: [{c}]{s0.get('name')}[/{c}] ({s0.get('user', 'root')}@{s0.get('host')}:{s0.get('port', 22)})[/{d}]")
+            console.print(f"[{d}]  Type [{c}]/server[/{c}] to connect or switch context.[/{d}]\n")
 
         while True:
             try:
@@ -126,14 +160,13 @@ class AgentCliApp:
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[dim]Use /exit to quit Argos.[/dim]")
             except Exception as e:
-                console.print(f"[bold red]● Error:[/bold red] {e}")
+                console.print(f"[{self.theme['error']}]● Error:[/{self.theme['error']}] {e}")
 
     def _get_active_session(self):
         if self.active_session_id:
             s = self.session_mgr.get_session(self.active_session_id)
             if s and s.status == "running":
                 return s
-        # If active_session_id is invalid or closed, fallback to first running session
         running = [s for s in self.session_mgr.sessions.values() if s.status == "running"]
         if running:
             self.active_session_id = running[0].session_id
@@ -143,18 +176,25 @@ class AgentCliApp:
 
     def _build_prompt(self):
         session = self._get_active_session()
+        p = self.theme["primary"]
+        s = self.theme["success"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+
         if session:
             srv_info = session.server_info or {}
             host = srv_info.get("host", "local")
             user = srv_info.get("user") or srv_info.get("username") or os.getenv("USERNAME", "user")
             rdir = session.remote_dir or "/"
-            # Shorten directory path
-            short_dir = rdir
-            if len(short_dir) > 25:
-                short_dir = "..." + short_dir[-22:]
+            if len(rdir) > 22:
+                rdir = "..." + rdir[-19:]
             agent = session.command or "agy"
-            return f"● [{user}@{host}:{short_dir} ({agent})] › "
-        return "● argos › "
+            # Get model if set
+            model_info = getattr(session, "model", "") or self.config.get_model(agent)
+            model_short = model_info.split("/")[-1] if model_info else ""
+            model_tag = f" · {model_short}" if model_short else ""
+            return f"[{p}]●[/{p}] [{s}]{user}@{host}[/{s}]:[{d}]{rdir}[/{d}] [{a}]({agent}{model_tag})[/{a}] › "
+        return f"[{p}]●[/{p}] [bold]argos[/bold] › "
 
     def handle_slash_command(self, cmd, arg):
         if cmd in ("/exit", "/quit"):
@@ -168,10 +208,19 @@ class AgentCliApp:
 
         elif cmd == "/clear":
             console.clear()
-            console.print(HEADER)
+            console.print(self.render_header())
 
         elif cmd in ("/server", "/servers", "/connect", "/c"):
             self.action_servers(arg)
+
+        elif cmd in ("/theme", "/themes"):
+            self.action_theme(arg)
+
+        elif cmd in ("/model", "/models"):
+            self.action_model(arg)
+
+        elif cmd in ("/effort", "/thinking"):
+            self.action_effort(arg)
 
         elif cmd in ("/tasks", "/sessions", "/ls"):
             self.action_list_tasks()
@@ -198,12 +247,18 @@ class AgentCliApp:
             self.action_close_task(arg)
 
         else:
-            console.print(f"[red]Unknown command: {cmd}. Type /help for available commands.[/red]")
+            console.print(f"[{self.theme['error']}]Unknown command: {cmd}. Type /help for available commands.[/{self.theme['error']}]")
 
     def show_help(self):
-        console.print("\n[bold]● Argos Commands[/bold]")
+        p = self.theme["primary"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        console.print(f"\n[{p}][bold]● Argos Commands[/bold][/{p}]")
         cmds = [
-            ("/server, /connect", "Select or add remote server / local environment"),
+            ("/server, /connect", "Select, add, or rename remote server / environment"),
+            ("/theme [name]", "Switch UI color palette (catppuccin, tokyo-night, dracula...)"),
+            ("/model [name]", "View or switch model for agy/claude (gemini, claude, deepseek)"),
+            ("/effort [level]", "Set reasoning/thinking effort (low, medium, high, off)"),
             ("/tasks, /ls", "List all running sessions and active context"),
             ("/switch <name|#>", "Switch active session context"),
             ("/terminal, /sh", "Attach terminal to active session (Ctrl+] to detach)"),
@@ -216,8 +271,151 @@ class AgentCliApp:
             ("/exit, /quit", "Exit Argos")
         ]
         for c, desc in cmds:
-            console.print(f"  [cyan]{c:<20}[/cyan] [dim]{desc}[/dim]")
+            console.print(f"  [{a}]{c:<20}[/{a}] [{d}]{desc}[/{d}]")
         console.print()
+
+    def action_theme(self, arg=""):
+        arg = (arg or "").strip().lower()
+        themes = list_themes()
+
+        if arg:
+            target_theme = get_theme(arg)
+            self.theme_id = target_theme["id"]
+            self.theme = target_theme
+            self.config.update_settings({"theme": self.theme_id})
+            self._init_prompt_session()
+            console.print(f"[{self.theme['success']}]● Theme switched to {self.theme['name']} {render_swatch(self.theme)}[/{self.theme['success']}]\n")
+            return
+
+        p = self.theme["primary"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        console.print(f"\n[{p}][bold]● Theme Palette & Background Style[/bold][/{p}]\n")
+
+        for idx, t in enumerate(themes, 1):
+            is_active = f" [{self.theme['success']}][active][/{self.theme['success']}]" if t["id"] == self.theme_id else ""
+            swatch = render_swatch(t)
+            console.print(f"  [{self.theme['warning']}][{idx}][/{self.theme['warning']}] [{a}]{t['id']:<14}[/{a}] {swatch}  [{d}]{t['desc']:<38}[/{d}]{is_active}")
+
+        console.print(f"\n  [{d}]Type [{a}]/theme <name>[/{a}] or select [1-{len(themes)}], [q] back[/{d}]\n")
+
+        try:
+            choice = input("› Select theme: ").strip()
+            if not choice or choice.lower() in ("q", "quit", "cancel"):
+                return
+            target_id = None
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(themes):
+                    target_id = themes[idx]["id"]
+            except ValueError:
+                target_id = choice.lower()
+
+            if target_id:
+                self.theme = get_theme(target_id)
+                self.theme_id = self.theme["id"]
+                self.config.update_settings({"theme": self.theme_id})
+                self._init_prompt_session()
+                console.print(f"[{self.theme['success']}]● Theme set to {self.theme['name']} {render_swatch(self.theme)}[/{self.theme['success']}]\n")
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+    def action_model(self, arg=""):
+        arg = (arg or "").strip()
+        session = self._get_active_session()
+        agent = (session.command if session else None) or self.config.get_settings().get("default_agent", "agy")
+        curr_model = getattr(session, "model", "") or self.config.get_model(agent)
+
+        if arg:
+            self.config.set_model(arg, agent)
+            if session:
+                session.model = arg
+                # If attached to agy, also send /model update if active
+                if agent == "agy" and session.backend:
+                    session.backend.write(f"/model {arg}\n")
+            console.print(f"[{self.theme['success']}]● Model set to: [bold]{arg}[/bold] (agent: {agent})[/{self.theme['success']}]\n")
+            return
+
+        p = self.theme["primary"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        console.print(f"\n[{p}][bold]● Model Selection[/bold][/{p}] [{d}](Agent: {agent})[/{d}]\n")
+        console.print(f"  Current Model: [{self.theme['success']}][bold]{curr_model}[/bold][/{self.theme['success']}]\n")
+
+        for idx, m in enumerate(POPULAR_MODELS, 1):
+            is_active = f" [{self.theme['success']}]● current[/{self.theme['success']}]" if m == curr_model else ""
+            console.print(f"  [{self.theme['warning']}][{idx}][/{self.theme['warning']}] [{a}]{m:<24}[/{a}]{is_active}")
+
+        console.print(f"\n  [{d}]Select [1-{len(POPULAR_MODELS)}], type custom model name, or [q] back[/{d}]\n")
+
+        try:
+            choice = input(f"› Pick model [{curr_model}]: ").strip()
+            if not choice or choice.lower() in ("q", "quit"):
+                return
+            chosen_model = choice
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(POPULAR_MODELS):
+                    chosen_model = POPULAR_MODELS[idx]
+            except ValueError:
+                pass
+
+            self.config.set_model(chosen_model, agent)
+            if session:
+                session.model = chosen_model
+                if agent == "agy" and session.backend:
+                    session.backend.write(f"/model {chosen_model}\n")
+            console.print(f"[{self.theme['success']}]● Model set to: [bold]{chosen_model}[/bold][/{self.theme['success']}]\n")
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+    def action_effort(self, arg=""):
+        arg = (arg or "").strip().lower()
+        curr_effort = self.config.get_thinking_effort()
+
+        if arg in ("low", "medium", "high", "off"):
+            self.config.set_thinking_effort(arg)
+            session = self._get_active_session()
+            if session and session.command == "agy" and session.backend:
+                session.backend.write(f"/effort {arg}\n")
+            console.print(f"[{self.theme['success']}]● Reasoning/Thinking effort set to: [bold]{arg}[/bold][/{self.theme['success']}]\n")
+            return
+
+        p = self.theme["primary"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        console.print(f"\n[{p}][bold]● Reasoning & Thinking Effort[/bold][/{p}]\n")
+        console.print(f"  Current Effort: [{self.theme['success']}][bold]{curr_effort}[/bold][/{self.theme['success']}]\n")
+
+        levels = [
+            ("high", "Full reasoning capability (recommended for complex coding and debugging)"),
+            ("medium", "Balanced reasoning speed and thoroughness"),
+            ("low", "Faster output, minimal chain-of-thought overhead"),
+            ("off", "Disable extended thinking")
+        ]
+
+        for idx, (lvl, desc) in enumerate(levels, 1):
+            is_active = f" [{self.theme['success']}]● current[/{self.theme['success']}]" if lvl == curr_effort else ""
+            console.print(f"  [{self.theme['warning']}][{idx}][/{self.theme['warning']}] [{a}]{lvl:<8}[/{a}] [{d}]{desc}[/{d}]{is_active}")
+
+        console.print(f"\n  [{d}]Select [1-4], or [q] back[/{d}]\n")
+
+        try:
+            choice = input(f"› Pick effort [{curr_effort}]: ").strip()
+            if not choice or choice.lower() in ("q", "quit"):
+                return
+            lvl_map = {"1": "high", "2": "medium", "3": "low", "4": "off"}
+            chosen_effort = lvl_map.get(choice, choice.lower())
+            if chosen_effort in ("low", "medium", "high", "off"):
+                self.config.set_thinking_effort(chosen_effort)
+                session = self._get_active_session()
+                if session and session.command == "agy" and session.backend:
+                    session.backend.write(f"/effort {chosen_effort}\n")
+                console.print(f"[{self.theme['success']}]● Reasoning/Thinking effort set to: [bold]{chosen_effort}[/bold][/{self.theme['success']}]\n")
+            else:
+                console.print(f"[{self.theme['error']}]Invalid effort level: {choice}[/{self.theme['error']}]")
+        except (KeyboardInterrupt, EOFError):
+            pass
 
     def action_servers(self, arg=""):
         servers = self.config.get_servers()
@@ -226,7 +424,7 @@ class AgentCliApp:
         if arg_lower == "add":
             new_srv = self._prompt_new_server()
             if new_srv:
-                console.print(f"[green]● Server '{new_srv.get('name')}' saved to setting.json[/green]")
+                console.print(f"[{self.theme['success']}]● Server '{new_srv.get('name')}' saved to setting.json[/{self.theme['success']}]")
                 try:
                     ask = input(f"Connect to {new_srv.get('name')} now? (Y/n): ").strip().lower()
                     if ask != "n":
@@ -235,18 +433,29 @@ class AgentCliApp:
                     pass
             return
 
+        if arg_lower.startswith("rename") or arg_lower.startswith("rn"):
+            parts = arg.split()
+            old_name = parts[1] if len(parts) > 1 else ""
+            new_name = parts[2] if len(parts) > 2 else ""
+            self._prompt_rename_server(old_name, new_name)
+            return
+
         if arg_lower in ("rm", "remove", "del"):
             self._prompt_remove_server()
             return
 
         # List environments in clean OpenCode/Pi aesthetic
-        console.print("\n[bold]● Available Environments[/bold]\n")
+        p = self.theme["primary"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        console.print(f"\n[{p}][bold]● Available Environments[/bold][/{p}]\n")
+
         active = self._get_active_session()
         active_srv_name = (active.server_info.get("name") if active and active.server_info else None) if active else None
 
         # [0] Local
-        cur_mark = " [bold green]● active[/bold green]" if (active and active.session_type == "local_pty") else ""
-        console.print(f"  [bold yellow][0][/bold yellow] [bold]Local Machine[/bold]          [dim]native PTY[/dim]         {os.getcwd()}{cur_mark}")
+        cur_mark = f" [{self.theme['success']}][bold]● active[/bold][/{self.theme['success']}]" if (active and active.session_type == "local_pty") else ""
+        console.print(f"  [{self.theme['warning']}][0][/{self.theme['warning']}] [bold]Local Machine[/bold]          [{d}]native PTY[/{d}]         {os.getcwd()}{cur_mark}")
 
         # [1..N] Remote
         for idx, s in enumerate(servers, 1):
@@ -254,13 +463,13 @@ class AgentCliApp:
             srv_user = s.get("user") or s.get("username") or "root"
             srv_host = s.get("host")
             srv_port = s.get("port", 22)
-            cur_mark = " [bold green]● active[/bold green]" if (active and active_srv_name == s.get("name")) else ""
-            console.print(f"  [bold yellow][{idx}][/bold yellow] [bold]{s.get('name'):<20}[/bold] [dim]{srv_user}@{srv_host}:{srv_port} ({auth_desc})[/dim]  {s.get('default_dir') or '/'}{cur_mark}")
+            cur_mark = f" [{self.theme['success']}][bold]● active[/bold][/{self.theme['success']}]" if (active and active_srv_name == s.get("name")) else ""
+            console.print(f"  [{self.theme['warning']}][{idx}][/{self.theme['warning']}] [{a}][bold]{s.get('name'):<20}[/bold][/{a}] [{d}]{srv_user}@{srv_host}:{srv_port} ({auth_desc})[/{d}]  {s.get('default_dir') or '/'}{cur_mark}")
 
-        console.print("\n  [dim]Select [bold yellow][0-{len(servers)}][/bold yellow], [bold green][a][/bold green] add server, [bold red][d][/bold red] delete, [bold][q][/bold] back[/dim]\n")
+        console.print(f"\n  [{d}]Select [{self.theme['warning']}][0-{len(servers)}][/{self.theme['warning']}], [{self.theme['success']}][a][/{self.theme['success']}] add, [{a}][r][/{a}] rename, [{self.theme['error']}][d][/{self.theme['error']}] delete, [q] back[/{d}]\n")
 
         selected_server = None
-        if arg:
+        if arg and not arg.startswith("rename"):
             if arg == "0":
                 selected_server = {"is_local": True, "name": "local", "default_dir": os.getcwd()}
             else:
@@ -281,8 +490,11 @@ class AgentCliApp:
                 elif choice.lower() in ("a", "add"):
                     new_srv = self._prompt_new_server()
                     if new_srv:
-                        console.print(f"[green]● Server '{new_srv.get('name')}' saved[/green]")
+                        console.print(f"[{self.theme['success']}]● Server '{new_srv.get('name')}' saved[/{self.theme['success']}]")
                         self._connect_to_server(new_srv)
+                    return
+                elif choice.lower() in ("r", "rename", "rn"):
+                    self._prompt_rename_server()
                     return
                 elif choice.lower() in ("d", "del", "rm", "remove"):
                     self._prompt_remove_server()
@@ -293,17 +505,55 @@ class AgentCliApp:
                         if 0 <= idx < len(servers):
                             selected_server = servers[idx]
                         else:
-                            console.print(f"[red]● Invalid choice: {choice}[/red]")
+                            console.print(f"[{self.theme['error']}]● Invalid choice: {choice}[/{self.theme['error']}]")
                             return
                     except ValueError:
                         selected_server = self.config.get_server(choice)
                         if not selected_server:
-                            console.print(f"[red]● Server not found: {choice}[/red]")
+                            console.print(f"[{self.theme['error']}]● Server not found: {choice}[/{self.theme['error']}]")
                             return
             except (KeyboardInterrupt, EOFError):
                 return
 
         self._connect_to_server(selected_server)
+
+    def _prompt_rename_server(self, old_name="", new_name=""):
+        servers = self.config.get_servers()
+        if not servers:
+            console.print("[dim]No servers configured.[/dim]")
+            return
+
+        if not old_name:
+            console.print(f"\n[{self.theme['primary']}][bold]● Rename Server[/bold][/{self.theme['primary']}]")
+            for idx, s in enumerate(servers, 1):
+                console.print(f"  [{self.theme['warning']}][{idx}][/{self.theme['warning']}] {s.get('name')} [dim]({s.get('user')}@{s.get('host')})[/dim]")
+            try:
+                pick = input("› Select server to rename (# or name): ").strip()
+                if not pick:
+                    return
+                try:
+                    idx = int(pick) - 1
+                    if 0 <= idx < len(servers):
+                        old_name = servers[idx].get("name")
+                except ValueError:
+                    old_name = pick
+            except (KeyboardInterrupt, EOFError):
+                return
+
+        if not new_name:
+            try:
+                new_name = input(f"› New name for '{old_name}': ").strip()
+            except (KeyboardInterrupt, EOFError):
+                return
+
+        if not new_name:
+            return
+
+        ok, res = self.config.rename_server(old_name, new_name)
+        if ok:
+            console.print(f"[{self.theme['success']}]● Server renamed to: [bold]{res}[/bold][/{self.theme['success']}]\n")
+        else:
+            console.print(f"[{self.theme['error']}]● Rename failed: {res}[/{self.theme['error']}]\n")
 
     def _connect_to_server(self, server_info):
         is_local = server_info.get("is_local", False)
@@ -333,11 +583,24 @@ class AgentCliApp:
 
         task_name = server_info.get("name") or (os.path.basename(work_dir.rstrip("/\\")) or "task")
 
+        # Build startup command with model and effort flags
+        startup_cmd = ""
+        model_name = self.config.get_model(agent_type)
+        effort_level = self.config.get_thinking_effort()
+
+        if agent_type == "agy":
+            startup_cmd = f"agy --model {model_name} --effort {effort_level}"
+        elif agent_type == "claude":
+            startup_cmd = f"claude --model {model_name}" if model_name else "claude"
+        elif agent_type == "codex":
+            startup_cmd = ""
+        elif agent_type == "shell":
+            startup_cmd = ""
+
         cols, rows = shutil.get_terminal_size((120, 30))
 
         if is_local:
             console.print(f"● Starting local task [{task_name}] ({agent_type})...")
-            startup_cmd = agent_type if agent_type != "shell" else ""
             session, err = self.session_mgr.create_session(
                 session_type="local_pty",
                 name=task_name,
@@ -351,7 +614,6 @@ class AgentCliApp:
             srv_host = server_info.get("host")
             srv_port = server_info.get("port", 22)
             console.print(f"● Connecting to {srv_user}@{srv_host}:{srv_port}...")
-            startup_cmd = agent_type if agent_type != "shell" else ""
             session, err = self.session_mgr.create_session(
                 session_type="remote_ssh",
                 name=task_name,
@@ -363,21 +625,28 @@ class AgentCliApp:
             )
 
         if err or not session:
-            console.print(f"[bold red]● Connection failed:[/bold red] {err or 'Unknown error'}\n")
+            console.print(f"[{self.theme['error']}][bold]● Connection failed:[/bold] {err or 'Unknown error'}[/{self.theme['error']}]\n")
             return
 
+        session.model = model_name
         self.active_session_id = session.session_id
-        console.print(f"[bold green]● Connected to {task_name}[/bold green] [dim]({session.session_type})[/dim]")
-        console.print(f"[dim]● Working directory: [cyan]{work_dir}[/cyan] | Agent: [magenta]{agent_type}[/magenta][/dim]")
-        console.print(f"[dim]● Type natural language prompts to run, or [cyan]/sh[/cyan] to enter interactive terminal.[/dim]\n")
+
+        p = self.theme["primary"]
+        s = self.theme["success"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+
+        console.print(f"[{s}][bold]● Connected to {task_name}[/bold] [dim]({session.session_type})[/dim][/{s}]")
+        console.print(f"[{d}]● Working directory: [{p}]{work_dir}[/{p}] | Agent: [{a}]{agent_type}[/{a}] (model: {model_name}, effort: {effort_level})[/{d}]")
+        console.print(f"[{d}]● Type natural language prompts to run, or [{a}]/sh[/{a}] to enter interactive terminal.[/{d}]\n")
 
     def _prompt_new_server(self):
-        console.print("\n[bold]● Add New Remote Server[/bold]")
+        console.print(f"\n[{self.theme['primary']}][bold]● Add New Remote Server[/bold][/{self.theme['primary']}]")
         try:
-            name = input("› Server name (e.g. ustc-gpu): ").strip() or "remote-server"
+            name = input("› Server name (e.g. scut-gpu): ").strip() or "remote-server"
             host = input("› Host / IP: ").strip()
             if not host:
-                console.print("[red]Host IP cannot be empty.[/red]")
+                console.print(f"[{self.theme['error']}]Host IP cannot be empty.[/{self.theme['error']}]")
                 return None
             port_in = input("› Port [22]: ").strip() or "22"
             port = int(port_in) if port_in.isdigit() else 22
@@ -393,10 +662,9 @@ class AgentCliApp:
                 auth_type = "password"
                 password = input("› Password: ").strip()
 
-            default_dir = input("› Default directory [/root/workspace]: ").strip() or "/root/workspace"
+            default_dir = input("› Default directory [/data/workspace]: ").strip() or "/data/workspace"
 
             res = self.config.add_or_update_server(name, host, port, user, auth_type, key_path, password, default_dir)
-            # Sync to global ~/.server-helper/setting.json as well
             try:
                 g_cfg = os.path.expanduser("~/.server-helper/setting.json")
                 if os.path.isfile(g_cfg):
@@ -415,7 +683,7 @@ class AgentCliApp:
         if not servers:
             console.print("[dim]No servers to remove.[/dim]")
             return
-        console.print("\n[bold]● Delete Server[/bold]")
+        console.print(f"\n[{self.theme['error']}][bold]● Delete Server[/bold][/{self.theme['error']}]")
         for idx, s in enumerate(servers, 1):
             console.print(f"  [{idx}] {s.get('name')} ({s.get('user')}@{s.get('host')})")
         try:
@@ -432,25 +700,30 @@ class AgentCliApp:
 
             if target:
                 self.config.remove_server(target.get("name"))
-                console.print(f"[green]● Server '{target.get('name')}' removed.[/green]")
+                console.print(f"[{self.theme['success']}]● Server '{target.get('name')}' removed.[/{self.theme['success']}]")
         except (KeyboardInterrupt, EOFError):
             pass
 
     def action_list_tasks(self):
         sessions = list(self.session_mgr.sessions.values())
         if not sessions:
-            console.print("[dim]● No active sessions. Type /server to connect.[/dim]")
+            console.print(f"[{self.theme['dim']}]● No active sessions. Type [{self.theme['accent']}]/server[/{self.theme['accent']}] to connect.[/{self.theme['dim']}]")
             return
 
-        console.print("\n[bold]● Active Sessions[/bold]\n")
+        p = self.theme["primary"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        console.print(f"\n[{p}][bold]● Active Sessions[/bold][/{p}]\n")
         active = self._get_active_session()
         for idx, s in enumerate(sessions, 1):
-            is_active = " [bold green]● current[/bold green]" if (active and s.session_id == active.session_id) else ""
+            is_active = f" [{self.theme['success']}][bold]● current[/bold][/{self.theme['success']}]" if (active and s.session_id == active.session_id) else ""
             target = s.server_info.get("name") if s.server_info else "local"
             rdir = s.remote_dir or "/"
             agent = s.command or "agent"
-            console.print(f"  [{idx}] [bold]{s.name:<18}[/bold] [dim]{target:<16}[/dim] [cyan]{rdir:<22}[/cyan] [magenta]{agent:<8}[/magenta] [green]{s.status}[/green]{is_active}")
-        console.print("\n  [dim]Type [cyan]/switch <name|#>[/cyan] to switch, [cyan]/sh[/cyan] to attach terminal[/dim]\n")
+            model_info = getattr(s, "model", "")
+            agent_str = f"{agent}({model_info})" if model_info else agent
+            console.print(f"  [{idx}] [bold]{s.name:<18}[/bold] [{d}]{target:<14}[/{d}] [{p}]{rdir:<20}[/{p}] [{a}]{agent_str:<18}[/{a}] [{self.theme['success']}]{s.status}[/{self.theme['success']}]{is_active}")
+        console.print(f"\n  [{d}]Type [{a}]/switch <name|#>[/{a}] to switch, [{a}]/sh[/{a}] to attach terminal[/{d}]\n")
 
     def action_switch_task(self, name):
         sessions = list(self.session_mgr.sessions.values())
@@ -478,18 +751,20 @@ class AgentCliApp:
 
         if target:
             self.active_session_id = target.session_id
-            console.print(f"[green]● Switched to session: [bold]{target.name}[/bold][/green]")
+            console.print(f"[{self.theme['success']}]● Switched to session: [bold]{target.name}[/bold][/{self.theme['success']}]")
         else:
-            console.print(f"[red]● Session '{name}' not found.[/red]")
+            console.print(f"[{self.theme['error']}]● Session '{name}' not found.[/{self.theme['error']}]")
 
     def action_open_terminal(self):
         session = self._get_active_session()
         if not session or not session.backend:
-            console.print("[yellow]● No active session. Type /server to connect first.[/yellow]")
+            console.print(f"[{self.theme['warning']}]● No active session. Type /server to connect first.[/{self.theme['warning']}]")
             return
 
+        a = self.theme["accent"]
+        d = self.theme["dim"]
         console.print(f"\n● [bold]Attached to {session.name}[/bold] ({session.command or 'shell'})")
-        console.print("[dim]Press [bold yellow]Ctrl + ][/bold yellow] to detach and return to Argos prompt[/dim]\n")
+        console.print(f"[{d}]Press [bold yellow]Ctrl + ][/bold yellow] to detach and return to Argos prompt[/{d}]\n")
 
         # Replay last lines of scrollback if available
         if session.scrollback:
@@ -518,7 +793,6 @@ class AgentCliApp:
                         # Handle Windows special / arrow keys (0x00 or 0xe0 prefix)
                         if ch in (b'\x00', b'\xe0'):
                             ch2 = msvcrt.getch()
-                            # Map arrows to ANSI escape codes
                             arrow_map = {
                                 b'H': b'\x1b[A',  # Up
                                 b'P': b'\x1b[B',  # Down
@@ -538,7 +812,6 @@ class AgentCliApp:
                     else:
                         time.sleep(0.01)
             else:
-                # Unix raw terminal mode
                 import select
                 while not stop_event.is_set() and session.status == "running":
                     r, _, _ = select.select([sys.stdin], [], [], 0.05)
@@ -549,7 +822,7 @@ class AgentCliApp:
                         session.backend.write(ch)
 
         except Exception as e:
-            console.print(f"\n[red]Terminal error: {e}[/red]")
+            console.print(f"\n[{self.theme['error']}]Terminal error: {e}[/{self.theme['error']}]")
         finally:
             stop_event.set()
             if on_term_output in session.output_listeners:
@@ -563,21 +836,20 @@ class AgentCliApp:
         session = self._get_active_session()
         if session:
             session.command = agent_name
-            console.print(f"[green]● Active session [{session.name}] agent set to: {agent_name}[/green]")
+            console.print(f"[{self.theme['success']}]● Active session [{session.name}] agent set to: {agent_name}[/{self.theme['success']}]")
         else:
             self.config.update_settings({"default_agent": agent_name})
-            console.print(f"[green]● Default agent set to: {agent_name}[/green]")
+            console.print(f"[{self.theme['success']}]● Default agent set to: {agent_name}[/{self.theme['success']}]")
 
     def action_show_status(self):
         session = self._get_active_session()
         if not session:
-            console.print("[yellow]● No active session.[/yellow]")
+            console.print(f"[{self.theme['warning']}]● No active session.[/{self.theme['warning']}]")
             return
 
-        console.print(f"● Inspecting environment for [bold cyan]{session.name}[/bold cyan]...")
+        console.print(f"● Inspecting environment for [{self.theme['primary']}][bold]{session.name}[/bold][/{self.theme['primary']}]...")
 
         if session.session_type == "remote_ssh" and hasattr(session.backend, "exec_command"):
-            # Run fast diagnostics over SSH
             check_cmd = (
                 "echo '=== GPU ===' && (nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader 2>/dev/null || echo '(No NVIDIA GPU)'); "
                 "echo '=== Memory ===' && free -h 2>/dev/null; "
@@ -603,11 +875,12 @@ class AgentCliApp:
         sessions = [s for s in self.session_mgr.sessions.values() if s.status == "running"]
         for s in sessions:
             s.backend.write(cmd + "\n")
-        console.print(f"[green]● Broadcasted to {len(sessions)} active session(s):[/green] {cmd}")
+        console.print(f"[{self.theme['success']}]● Broadcasted to {len(sessions)} active session(s):[/{self.theme['success']}] {cmd}")
 
     def action_close_task(self, name):
         session = self._get_active_session()
         target_id = None
+        target_name = ""
         if not name and session:
             target_id = session.session_id
             target_name = session.name
@@ -622,41 +895,42 @@ class AgentCliApp:
             self.session_mgr.close_session(target_id)
             if self.active_session_id == target_id:
                 self.active_session_id = None
-            console.print(f"[yellow]● Session [{target_name}] closed.[/yellow]")
+            console.print(f"[{self.theme['warning']}]● Session [{target_name}] closed.[/{self.theme['warning']}]")
         else:
-            console.print(f"[red]● Session not found: {name}[/red]")
+            console.print(f"[{self.theme['error']}]● Session not found: {name}[/{self.theme['error']}]")
 
     def action_config(self):
         s = self.config.get_settings()
-        console.print("\n[bold]● Argos Configuration[/bold]")
-        console.print(f"  Config file:   {self.config.config_path}")
-        console.print(f"  Default agent: {s.get('default_agent', 'agy')}")
-        console.print(f"  Auto reconnect: {s.get('auto_reconnect', True)}")
-        console.print(f"  Servers saved: {len(self.config.get_servers())}\n")
+        p = self.theme["primary"]
+        d = self.theme["dim"]
+        console.print(f"\n[{p}][bold]● Argos Configuration[/bold][/{p}]")
+        console.print(f"  Config file:     {self.config.config_path}")
+        console.print(f"  Current theme:   {self.theme['name']} ({self.theme_id})")
+        console.print(f"  Default agent:   {s.get('default_agent', 'agy')}")
+        console.print(f"  Default model:   {s.get('default_model', 'gemini-2.5-pro')}")
+        console.print(f"  Thinking effort: {s.get('thinking_effort', 'high')}")
+        console.print(f"  Servers saved:   {len(self.config.get_servers())}\n")
 
     def handle_natural_language_prompt(self, prompt):
         session = self._get_active_session()
         if not session:
-            console.print("[dim]● No environment connected. Type [cyan]/server[/cyan] to connect to a local or remote server.[/dim]")
+            console.print(f"[{self.theme['dim']}]● No environment connected. Type [{self.theme['accent']}][bold]/server[/bold][/{self.theme['accent']}] to connect to a local or remote server.[/{self.theme['dim']}]")
             return
 
         agent = (session.command or "agy").lower()
 
         if agent in ("agy", "claude"):
-            # Pass prompt directly into active agent session
             session.backend.write(prompt + "\n")
-            console.print(f"[dim]● Sent to {agent}. Type [cyan]/sh[/cyan] to enter interactive terminal and see output.[/dim]")
+            console.print(f"[{self.theme['dim']}]● Sent to {agent}. Type [{self.theme['accent']}][bold]/sh[/bold][/{self.theme['accent']}] to enter interactive terminal and observe live output.[/{self.theme['dim']}]")
         elif agent == "shell":
-            # Pass directly to shell
             session.backend.write(prompt + "\n")
             time.sleep(0.3)
             recent = session.scrollback[-2000:]
             if recent:
                 console.print(recent.strip())
         else:
-            # Autonomous agent loop
             session.backend.write(prompt + "\n")
-            console.print(f"[dim]● Prompt dispatched. Type [cyan]/sh[/cyan] to attach terminal.[/dim]")
+            console.print(f"[{self.theme['dim']}]● Prompt dispatched. Type [{self.theme['accent']}][bold]/sh[/bold][/{self.theme['accent']}] to attach terminal.[/{self.theme['dim']}]")
 
 
 def main():

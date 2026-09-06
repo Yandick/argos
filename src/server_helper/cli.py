@@ -268,6 +268,15 @@ def cmd_server(args):
         else:
             console.print(f"[red]找不到服务器 '{args.name}'。[/red]")
 
+    elif action == "rename":
+        old_name = args.name or Prompt.ask("原服务器名称")
+        new_name = getattr(args, "new_name", None) or Prompt.ask("新服务器名称")
+        ok, res = config.rename_server(old_name, new_name)
+        if ok:
+            console.print(f"[bold green]✅ 已成功重命名服务器 '{old_name}' 为 '{res}'！[/bold green]")
+        else:
+            console.print(f"[red]重命名失败: {res}[/red]")
+
 
 def cmd_config(args):
     """View or update settings"""
@@ -368,8 +377,9 @@ def main():
 
     # server
     p_srv = subparsers.add_parser("server", help="管理远程服务器配置")
-    p_srv.add_argument("action", choices=["list", "ls", "add", "remove", "rm"], help="操作")
+    p_srv.add_argument("action", choices=["list", "ls", "add", "remove", "rm", "rename"], help="操作")
     p_srv.add_argument("name", nargs="?", help="服务器名称")
+    p_srv.add_argument("new_name", nargs="?", help="新服务器名称 (重命名时使用)")
     p_srv.add_argument("--host", help="主机 IP 或域名")
     p_srv.add_argument("--port", type=int, default=22, help="SSH 端口")
     p_srv.add_argument("--user", default="root", help="SSH 用户名")
