@@ -23,12 +23,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-repo/argos-agent"
+    "url": "https://github.com/Yandick/argos"
   },
   "bugs": {
-    "url": "https://github.com/your-repo/argos-agent/issues"
+    "url": "https://github.com/Yandick/argos/issues"
   },
-  "homepage": "https://github.com/your-repo/argos-agent#readme",
+  "homepage": "https://github.com/Yandick/argos#readme",
   "engines": {
     "node": ">=16.0.0"
   },

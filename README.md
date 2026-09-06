@@ -51,8 +51,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-repo/server-helper.git
-cd server-helper
+git clone https://github.com/Yandick/argos.git
+cd argos
 
 # 使用 uv（推荐，极速）
 uv venv

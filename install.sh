@@ -2,7 +2,7 @@
 # ==============================================================================
 # Argos (Ἄργος) - One-line Installer for Linux & macOS
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/your-repo/argos-agent/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Yandick/argos/main/install.sh | bash
 # ==============================================================================
 set -e
 

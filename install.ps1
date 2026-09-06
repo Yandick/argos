@@ -1,7 +1,7 @@
 # ==============================================================================
 # Argos - One-line Installer for Windows PowerShell
 # Usage:
-#   irm https://raw.githubusercontent.com/your-repo/argos-agent/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/Yandick/argos/main/install.ps1 | iex
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
