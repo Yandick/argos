@@ -33,10 +33,11 @@ class TaskSession:
                 auth_type = self.server_info.get("auth_type") or self.server_info.get("auth") or "key"
                 key_path = self.server_info.get("key_path") or self.server_info.get("key")
                 password = self.server_info.get("password") or self.server_info.get("pass")
+                ssh_user = self.server_info.get("user") or self.server_info.get("username") or "root"
                 backend = SSHClientWrapper(
                     host=self.server_info.get("host"),
                     port=int(self.server_info.get("port", 22)),
-                    user=self.server_info.get("user", "root"),
+                    user=ssh_user,
                     auth_type=auth_type,
                     key_path=key_path,
                     password=password

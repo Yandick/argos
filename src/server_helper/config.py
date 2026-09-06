@@ -86,8 +86,14 @@ class Config:
             s["auth"] = s["auth_type"]
         if "key_path" not in s and "key" in s:
             s["key_path"] = s["key"]
+        if "user" not in s and "username" in s:
+            s["user"] = s["username"]
+        if "username" not in s and "user" in s:
+            s["username"] = s["user"]
         if "password" not in s and "pass" in s:
             s["password"] = s["pass"]
+        if "pass" not in s and "password" in s:
+            s["pass"] = s["password"]
         return s
 
     def get_servers(self):

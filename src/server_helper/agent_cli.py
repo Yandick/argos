@@ -1,40 +1,46 @@
 """
-OpenCode & Pi style Agent CLI Interface for ServerHelper
-Provides interactive slash commands, autocompletion, multi-task switching, and terminal attachment.
+Argos (Ἄργος) CLI Interface
+Minimalist OpenCode & Pi aesthetic agent orchestrator.
+Runs in-process without secondary console popups or external daemons.
 """
 import os
 import sys
 import time
 import shutil
+import threading
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.markdown import Markdown
 from rich.text import Text
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.styles import Style
-
 from prompt_toolkit.output import create_output, DummyOutput
 from prompt_toolkit.input import create_input, DummyInput
 
+import warnings
+try:
+    from cryptography.utils import CryptographyDeprecationWarning
+    warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
+except Exception:
+    pass
+
+# Ensure server-helper root is in sys.path
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 from server_helper.config import Config
-from server_helper.daemon import api_get, api_post, ensure_daemon_running
-from server_helper.tui import attach_terminal
-from server_helper.agent_bridge import run_cli_agent_task
-from server_helper.ssh import SSHClientWrapper
+from session_manager import SessionManager
 
 console = Console()
 
 SLASH_COMMANDS = [
     "/server",
-    "/servers",
     "/connect",
     "/tasks",
     "/switch",
     "/terminal",
+    "/sh",
     "/agent",
     "/status",
     "/broadcast",
@@ -48,29 +54,20 @@ SLASH_COMMANDS = [
 
 completer = WordCompleter(SLASH_COMMANDS, ignore_case=True, sentence=True)
 
-pt_style = Style.from_dict({
-    'prompt': '#6366f1 bold',
-    'badge': '#10b981 bold',
-})
-
-BANNER = r"""
- [bold cyan]  █████╗ ██████╗  ██████╗  ██████╗ ███████╗[/bold cyan]
- [bold cyan] ██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗██╔════╝[/bold cyan]
- [bold cyan] ███████║██████╔╝██║  ███╗██║   ██║███████╗[/bold cyan]
- [bold cyan] ██╔══██║██╔══██╗██║   ██║██║   ██║╚════██║[/bold cyan]
- [bold cyan] ██║  ██║██║  ██║╚██████╔╝╚██████╔╝███████║[/bold cyan]
- [bold cyan] ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝[/bold cyan]
- [dim]⚡ [bold]ARGOS[/bold] (Ἄργος) v0.3.0 | All-Seeing Multi-Agent Remote Orchestrator[/dim]
- [dim]输入 [bold yellow]/help[/bold yellow] 查看指令列表，输入 [bold yellow]/connect[/bold yellow] 连接远程服务器[/dim]
-"""
+HEADER = (
+    "[bold cyan]●[/bold cyan] [bold]argos[/bold] [dim]v0.3.0 · remote coding agent orchestrator[/dim]\n"
+    "[dim]Type [cyan]/server[/cyan] to switch context, [cyan]/help[/cyan] for commands[/dim]\n"
+)
 
 
 class AgentCliApp:
     def __init__(self):
         self.config = Config()
-        self.active_session = None  # dictionary of active session
+        self.session_mgr = SessionManager()
+        self.active_session_id = None
         self.history_file = os.path.expanduser("~/.server-helper/cli_history")
         os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+
         try:
             pt_out = create_output()
         except Exception:
@@ -81,26 +78,39 @@ class AgentCliApp:
         except Exception:
             pt_in = DummyInput()
 
-        self.session_prompt = PromptSession(
-            history=FileHistory(self.history_file),
-            completer=completer,
-            output=pt_out,
-            input=pt_in
-        )
+        try:
+            self.session_prompt = PromptSession(
+                history=FileHistory(self.history_file),
+                completer=completer,
+                output=pt_out,
+                input=pt_in
+            )
+        except Exception:
+            self.session_prompt = None
+
+    def _get_user_input(self, prompt_text):
+        if self.session_prompt:
+            try:
+                return self.session_prompt.prompt(prompt_text).strip()
+            except Exception:
+                pass
+        return input(prompt_text).strip()
 
     def run(self):
-        # Ensure daemon is running
-        ensure_daemon_running()
         console.clear()
-        console.print(BANNER)
+        console.print(HEADER)
 
-        # Restore last active session if any
-        self._sync_sessions()
+        # Auto-connect or pre-select first server if configured
+        servers = self.config.get_servers()
+        if servers:
+            s0 = servers[0]
+            console.print(f"[dim]● Configured remote server available: [bold cyan]{s0.get('name')}[/bold cyan] ({s0.get('user', 'root')}@{s0.get('host')}:{s0.get('port', 22)})[/dim]")
+            console.print("[dim]  Type [cyan]/server[/cyan] to connect, or type prompts directly.[/dim]\n")
 
         while True:
             try:
                 prompt_text = self._build_prompt()
-                user_input = self.session_prompt.prompt(prompt_text).strip()
+                user_input = self._get_user_input(prompt_text)
 
                 if not user_input:
                     continue
@@ -114,32 +124,43 @@ class AgentCliApp:
                     self.handle_natural_language_prompt(user_input)
 
             except (KeyboardInterrupt, EOFError):
-                console.print("\n[dim]使用 /exit 退出程序。[/dim]")
+                console.print("\n[dim]Use /exit to quit Argos.[/dim]")
             except Exception as e:
-                console.print(f"[bold red]运行异常:[/bold red] {e}")
+                console.print(f"[bold red]● Error:[/bold red] {e}")
+
+    def _get_active_session(self):
+        if self.active_session_id:
+            s = self.session_mgr.get_session(self.active_session_id)
+            if s and s.status == "running":
+                return s
+        # If active_session_id is invalid or closed, fallback to first running session
+        running = [s for s in self.session_mgr.sessions.values() if s.status == "running"]
+        if running:
+            self.active_session_id = running[0].session_id
+            return running[0]
+        self.active_session_id = None
+        return None
 
     def _build_prompt(self):
-        if self.active_session:
-            name = self.active_session.get("name", "task")
-            srv = self.active_session.get("server_name", "local")
-            rdir = self.active_session.get("remote_dir", "/")
-            short_dir = os.path.basename(rdir.rstrip("/\\")) or rdir
-            agent = self.active_session.get("command") or "agent"
-            return f"[{name}@{srv}:{short_dir} ({agent})] ❯ "
-        return "server-helper ❯ "
-
-    def _sync_sessions(self):
-        res = api_get("/api/sessions")
-        sessions = res.get("sessions", [])
-        if sessions:
-            if not self.active_session or not any(s.get("session_id") == self.active_session.get("session_id") for s in sessions):
-                self.active_session = sessions[0]
-        else:
-            self.active_session = None
+        session = self._get_active_session()
+        if session:
+            srv_info = session.server_info or {}
+            host = srv_info.get("host", "local")
+            user = srv_info.get("user") or srv_info.get("username") or os.getenv("USERNAME", "user")
+            rdir = session.remote_dir or "/"
+            # Shorten directory path
+            short_dir = rdir
+            if len(short_dir) > 25:
+                short_dir = "..." + short_dir[-22:]
+            agent = session.command or "agy"
+            return f"● [{user}@{host}:{short_dir} ({agent})] › "
+        return "● argos › "
 
     def handle_slash_command(self, cmd, arg):
         if cmd in ("/exit", "/quit"):
-            console.print("[dim]ServerHelper CLI 已退出，后台任务将持续保持运行。[/dim]")
+            console.print("[dim]Exiting Argos. Sessions closed.[/dim]")
+            for s in list(self.session_mgr.sessions.values()):
+                s.close()
             sys.exit(0)
 
         elif cmd == "/help":
@@ -147,7 +168,7 @@ class AgentCliApp:
 
         elif cmd == "/clear":
             console.clear()
-            console.print(BANNER)
+            console.print(HEADER)
 
         elif cmd in ("/server", "/servers", "/connect", "/c"):
             self.action_servers(arg)
@@ -177,48 +198,38 @@ class AgentCliApp:
             self.action_close_task(arg)
 
         else:
-            console.print(f"[red]未知指令: {cmd}。输入 /help 查看所有可用命令。[/red]")
+            console.print(f"[red]Unknown command: {cmd}. Type /help for available commands.[/red]")
 
     def show_help(self):
-        table = Table(title="📖 Argos Agent CLI 指令表", border_style="cyan")
-        table.add_column("命令", style="bold yellow")
-        table.add_column("说明", style="white")
-
-        table.add_row("/server (或 /connect)", "类似 /model 列出服务器选择、挑选远程目录并快速连接")
-        table.add_row("/server add", "在终端中交互式录入新的 SSH 服务器与密码/私钥并保存")
-        table.add_row("/server rm", "从 setting.json 中删除指定服务器配置")
-        table.add_row("/tasks (或 /ls)", "列出当前所有并发运行的任务会话与状态")
-        table.add_row("/switch <名称>", "在多个任务间无缝切换活跃上下文 (例如 /switch safety)")
-        table.add_row("/terminal (或 /sh)", "挂载进入当前任务的原生交互式终端 (按 Ctrl+] 脱离)")
-        table.add_row("/agent <名称>", "更换当前任务的 Agent 引擎 (claude / agy / codex / shell)")
-        table.add_row("/status", "查看当前任务服务器的 GPU 显存、CPU、内存及 Git 状态")
-        table.add_row("/broadcast <指令>", "向所有活跃任务同时广播执行命令 (如 /broadcast nvidia-smi)")
-        table.add_row("/close [名称]", "关闭当前或指定任务")
-        table.add_row("/config", "查看当前 setting.json 路径与配置")
-        table.add_row("/clear", "清屏")
-        table.add_row("/exit (或 /quit)", "退出 CLI 终端 (后台任务保持运行)")
-        console.print(table)
-
-    def action_connect(self, arg):
-        """Interactive connection flow (alias to /server)"""
-        self.action_servers(arg)
+        console.print("\n[bold]● Argos Commands[/bold]")
+        cmds = [
+            ("/server, /connect", "Select or add remote server / local environment"),
+            ("/tasks, /ls", "List all running sessions and active context"),
+            ("/switch <name|#>", "Switch active session context"),
+            ("/terminal, /sh", "Attach terminal to active session (Ctrl+] to detach)"),
+            ("/agent <name>", "Switch agent engine (agy, claude, codex, shell)"),
+            ("/status", "Show remote CPU, GPU, memory and load status"),
+            ("/broadcast <cmd>", "Broadcast shell command to all sessions"),
+            ("/close [name|#]", "Close a running session"),
+            ("/config", "Show config file path and default settings"),
+            ("/clear", "Clear screen"),
+            ("/exit, /quit", "Exit Argos")
+        ]
+        for c, desc in cmds:
+            console.print(f"  [cyan]{c:<20}[/cyan] [dim]{desc}[/dim]")
+        console.print()
 
     def action_servers(self, arg=""):
-        """
-        Interactive Server Manager like /model in coding agents.
-        Lists all servers, lets user pick server by number, select remote directory, and connect.
-        Also supports adding and removing servers directly from terminal.
-        """
-        arg = (arg or "").strip()
-        arg_lower = arg.lower()
+        servers = self.config.get_servers()
+        arg_lower = (arg or "").strip().lower()
 
         if arg_lower == "add":
             new_srv = self._prompt_new_server()
             if new_srv:
-                console.print(f"[bold green]✅ 服务器 '{new_srv.get('name')}' 已保存至 setting.json！[/bold green]")
+                console.print(f"[green]● Server '{new_srv.get('name')}' saved to setting.json[/green]")
                 try:
-                    ask_conn = input(f"是否立即连接到 {new_srv.get('name')} 并选择目录？(Y/n): ").strip().lower()
-                    if ask_conn != "n":
+                    ask = input(f"Connect to {new_srv.get('name')} now? (Y/n): ").strip().lower()
+                    if ask != "n":
                         self._connect_to_server(new_srv)
                 except (KeyboardInterrupt, EOFError):
                     pass
@@ -228,46 +239,30 @@ class AgentCliApp:
             self._prompt_remove_server()
             return
 
-        is_interactive = sys.stdin.isatty()
-        servers = self.config.get_servers()
-        if not servers:
-            console.print(Panel(
-                "[yellow]尚未配置任何远程服务器。[/yellow]\n\n"
-                "[dim]• 您可以在此交互式录入常用 SSH 服务器与密码，将自动保存到 setting.json。\n"
-                "• 也可以直接用文本编辑器打开 setting.json 填入平时用的服务器。[/dim]",
-                title="🖥️ 远程服务器配置",
-                border_style="yellow"
-            ))
-            if not is_interactive:
-                return
-            try:
-                ask_add = input("是否现在添加一个新服务器？(Y/n): ").strip().lower()
-                if ask_add != "n":
-                    new_srv = self._prompt_new_server()
-                    if new_srv:
-                        console.print(f"[bold green]✅ 服务器 '{new_srv.get('name')}' 已保存至 setting.json！[/bold green]")
-                        ask_conn = input(f"是否立即连接到 {new_srv.get('name')} 并选择目录？(Y/n): ").strip().lower()
-                        if ask_conn != "n":
-                            self._connect_to_server(new_srv)
-            except (KeyboardInterrupt, EOFError):
-                pass
-            return
+        # List environments in clean OpenCode/Pi aesthetic
+        console.print("\n[bold]● Available Environments[/bold]\n")
+        active = self._get_active_session()
+        active_srv_name = (active.server_info.get("name") if active and active.server_info else None) if active else None
 
-        if arg_lower in ("ls", "list"):
-            self._print_servers_table(servers)
-            return
+        # [0] Local
+        cur_mark = " [bold green]● active[/bold green]" if (active and active.session_type == "local_pty") else ""
+        console.print(f"  [bold yellow][0][/bold yellow] [bold]Local Machine[/bold]          [dim]native PTY[/dim]         {os.getcwd()}{cur_mark}")
 
-        # List servers like /model in coding agents
-        self._print_servers_table(servers)
-        console.print(f"[dim]快捷操作: [bold yellow][0][/bold yellow] 本地任务 | [bold yellow][1-{len(servers)}][/bold yellow] 远程连接 | [bold green][a][/bold green] 添加新服务器 | [bold red][d][/bold red] 删除服务器 | [bold][q][/bold] 退出[/dim]\n")
+        # [1..N] Remote
+        for idx, s in enumerate(servers, 1):
+            auth_desc = "key" if s.get("auth_type") == "key" else "password"
+            srv_user = s.get("user") or s.get("username") or "root"
+            srv_host = s.get("host")
+            srv_port = s.get("port", 22)
+            cur_mark = " [bold green]● active[/bold green]" if (active and active_srv_name == s.get("name")) else ""
+            console.print(f"  [bold yellow][{idx}][/bold yellow] [bold]{s.get('name'):<20}[/bold] [dim]{srv_user}@{srv_host}:{srv_port} ({auth_desc})[/dim]  {s.get('default_dir') or '/'}{cur_mark}")
 
-        if not is_interactive:
-            return
+        console.print("\n  [dim]Select [bold yellow][0-{len(servers)}][/bold yellow], [bold green][a][/bold green] add server, [bold red][d][/bold red] delete, [bold][q][/bold] back[/dim]\n")
 
         selected_server = None
         if arg:
             if arg == "0":
-                selected_server = {"is_local": True, "name": "local-machine", "default_dir": os.getcwd()}
+                selected_server = {"is_local": True, "name": "local", "default_dir": os.getcwd()}
             else:
                 try:
                     idx = int(arg) - 1
@@ -278,20 +273,18 @@ class AgentCliApp:
 
         if not selected_server:
             try:
-                choice = input("👉 请输入编号或操作 [0]: ").strip() or "0"
-                if choice.lower() in ("q", "quit", "cancel"):
+                choice = input("› Select: ").strip()
+                if not choice or choice.lower() in ("q", "quit", "cancel"):
                     return
                 elif choice == "0":
-                    selected_server = {"is_local": True, "name": "local-machine", "default_dir": os.getcwd()}
+                    selected_server = {"is_local": True, "name": "local", "default_dir": os.getcwd()}
                 elif choice.lower() in ("a", "add"):
                     new_srv = self._prompt_new_server()
                     if new_srv:
-                        console.print(f"[bold green]✅ 服务器 '{new_srv.get('name')}' 已保存至 setting.json！[/bold green]")
-                        ask_conn = input(f"是否立即连接到 {new_srv.get('name')} 并选择目录？(Y/n): ").strip().lower()
-                        if ask_conn != "n":
-                            self._connect_to_server(new_srv)
+                        console.print(f"[green]● Server '{new_srv.get('name')}' saved[/green]")
+                        self._connect_to_server(new_srv)
                     return
-                elif choice.lower() in ("d", "del", "remove", "rm"):
+                elif choice.lower() in ("d", "del", "rm", "remove"):
                     self._prompt_remove_server()
                     return
                 else:
@@ -300,184 +293,133 @@ class AgentCliApp:
                         if 0 <= idx < len(servers):
                             selected_server = servers[idx]
                         else:
-                            console.print(f"[red]无效编号: {choice}[/red]")
+                            console.print(f"[red]● Invalid choice: {choice}[/red]")
                             return
                     except ValueError:
                         selected_server = self.config.get_server(choice)
                         if not selected_server:
-                            console.print(f"[red]找不到服务器: {choice}[/red]")
+                            console.print(f"[red]● Server not found: {choice}[/red]")
                             return
             except (KeyboardInterrupt, EOFError):
                 return
 
         self._connect_to_server(selected_server)
 
-    def _print_servers_table(self, servers):
-        table = Table(title="🖥️ 可用服务器与环境列表 (类似 /model 列表)", border_style="blue")
-        table.add_column("编号", justify="center", style="bold yellow")
-        table.add_column("环境 / 服务器名称", style="bold cyan")
-        table.add_column("连接地址 / 类型", style="white")
-        table.add_column("用户名", style="magenta")
-        table.add_column("认证方式", style="yellow")
-        table.add_column("默认工作目录", style="white")
-
-        table.add_row(
-            "[0]",
-            "本地开发机 (Local Machine)",
-            "本机原生 PTY",
-            os.getenv("USERNAME", "local"),
-            "本地免密",
-            os.getcwd()
-        )
-
-        for idx, s in enumerate(servers, 1):
-            auth_desc = "私钥" if s.get("auth_type") == "key" else "密码"
-            table.add_row(
-                f"[{idx}]",
-                s.get("name"),
-                f"{s.get('host')}:{s.get('port', 22)}",
-                s.get("user", "root"),
-                auth_desc,
-                s.get("default_dir") or "/"
-            )
-        console.print(table)
-
     def _connect_to_server(self, server_info):
         is_local = server_info.get("is_local", False)
 
         if is_local:
-            console.print(Panel(
-                "目标环境: [bold cyan]本地开发机 (Local Machine)[/bold cyan]\n"
-                "运行模式: [green]本机原生 PTY (支持直接接入 agy / claude / powershell)[/green]",
-                title="🔗 准备启动本地任务",
-                border_style="cyan"
-            ))
             default_dir = server_info.get("default_dir") or os.getcwd()
-            console.print(f"[bold]📁 请选择或输入本地工作目录:[/bold]")
-            console.print(f"   [dim]直接回车使用当前目录: [bold green]{default_dir}[/bold green][/dim]")
             try:
-                work_dir = input(f"本地工作目录 [{default_dir}]: ").strip() or default_dir
+                work_dir = input(f"› Local directory [{default_dir}]: ").strip() or default_dir
             except (KeyboardInterrupt, EOFError):
-                console.print("[yellow]已取消。[/yellow]")
                 return
         else:
-            console.print(Panel(
-                f"目标服务器: [bold cyan]{server_info.get('name')}[/bold cyan] ({server_info.get('user')}@{server_info.get('host')}:{server_info.get('port', 22)})\n"
-                f"认证方式: [yellow]{'私钥' if server_info.get('auth_type') == 'key' else '密码'}[/yellow]",
-                title="🔗 准备建立连接",
-                border_style="cyan"
-            ))
             default_dir = server_info.get("default_dir") or "/workspace"
-            console.print(f"[bold]📁 请选择或输入远程工作目录:[/bold]")
-            console.print(f"   [dim]直接回车使用默认目录: [bold green]{default_dir}[/bold green]，或输入自定义目录 (如 /data/rec 或 /workspace/safety)[/dim]")
             try:
-                work_dir = input(f"远程工作目录 [{default_dir}]: ").strip() or default_dir
+                work_dir = input(f"› Remote directory [{default_dir}]: ").strip() or default_dir
             except (KeyboardInterrupt, EOFError):
-                console.print("[yellow]已取消连接。[/yellow]")
                 return
 
-        # 2. Agent selection
-        default_agent = self.config.get_settings().get("default_agent", "claude")
-        console.print(f"\n[bold]🤖 请选择挂载的 Agent 引擎:[/bold]")
-        console.print(f"  [1] [bold magenta]Claude Code[/bold magenta] (claude)")
-        console.print(f"  [2] [bold magenta]Antigravity CLI[/bold magenta] (agy)")
-        console.print(f"  [3] [bold magenta]Codex / LLM API[/bold magenta] (基于 DeepSeek/OpenAI 自主工具循环)")
-        console.print(f"  [4] 原生终端 (shell / bash)")
-
+        # Agent engine choice
+        default_agent = self.config.get_settings().get("default_agent", "agy")
+        console.print(f"› Agent engine: [1] agy  [2] claude  [3] codex  [4] shell  (default: {default_agent})")
         try:
-            agent_pick = input("选择 Agent [2]: ").strip() or "2"
+            agent_pick = input("› Pick [1]: ").strip() or "1"
         except (KeyboardInterrupt, EOFError):
-            console.print("[yellow]已取消。[/yellow]")
             return
-        agent_map = {"1": "claude", "2": "agy", "3": "codex", "4": "shell"}
-        agent_type = agent_map.get(agent_pick, "agy")
+        agent_map = {"1": "agy", "2": "claude", "3": "codex", "4": "shell"}
+        agent_type = agent_map.get(agent_pick, default_agent)
 
-        # 3. Task Name
-        dir_name = os.path.basename(work_dir.rstrip("/\\")) or "task"
-        try:
-            task_name = input(f"\n🏷️ 任务标识名称 [{dir_name}]: ").strip() or dir_name
-        except (KeyboardInterrupt, EOFError):
-            task_name = dir_name
+        task_name = server_info.get("name") or (os.path.basename(work_dir.rstrip("/\\")) or "task")
 
-        console.print(f"\n[cyan]正在初始化任务 [{task_name}] (Agent: {agent_type})...[/cyan]")
+        cols, rows = shutil.get_terminal_size((120, 30))
 
         if is_local:
-            payload = {
-                "name": task_name,
-                "session_type": "local_pty",
-                "remote_dir": work_dir,
-                "cwd": work_dir,
-                "startup_cmd": agent_type if agent_type != "shell" else ""
-            }
+            console.print(f"● Starting local task [{task_name}] ({agent_type})...")
+            startup_cmd = agent_type if agent_type != "shell" else ""
+            session, err = self.session_mgr.create_session(
+                session_type="local_pty",
+                name=task_name,
+                cwd=work_dir,
+                startup_cmd=startup_cmd,
+                cols=cols,
+                rows=rows
+            )
         else:
-            # Sync server info to daemon
-            api_post("/api/config/server", server_info)
-            payload = {
-                "name": task_name,
-                "session_type": "remote_ssh",
-                "server_id": server_info.get("id"),
-                "remote_dir": work_dir,
-                "startup_cmd": agent_type if agent_type != "shell" else ""
-            }
+            srv_user = server_info.get("user") or server_info.get("username") or "root"
+            srv_host = server_info.get("host")
+            srv_port = server_info.get("port", 22)
+            console.print(f"● Connecting to {srv_user}@{srv_host}:{srv_port}...")
+            startup_cmd = agent_type if agent_type != "shell" else ""
+            session, err = self.session_mgr.create_session(
+                session_type="remote_ssh",
+                name=task_name,
+                server_info=server_info,
+                remote_dir=work_dir,
+                startup_cmd=startup_cmd,
+                cols=cols,
+                rows=rows
+            )
 
-        res = api_post("/api/sessions", payload)
-        if not res.get("success"):
-            console.print(f"[bold red]❌ 连接失败:[/bold red] {res.get('error')}")
+        if err or not session:
+            console.print(f"[bold red]● Connection failed:[/bold red] {err or 'Unknown error'}\n")
             return
 
-        self.active_session = res.get("session")
-        console.print(Panel(
-            f"[bold green]✅ 任务 [{task_name}] 已成功连接并就绪！[/bold green]\n\n"
-            f"[bold]目标节点:[/bold] {server_info.get('user')}@{server_info.get('host')}:{server_info.get('port', 22)}\n"
-            f"[bold]工作目录:[/bold] [cyan]{remote_dir}[/cyan]\n"
-            f"[bold]Agent 引擎:[/bold] [magenta]{agent_type}[/magenta]\n\n"
-            f"💡 [dim]操作指引:[/dim]\n"
-            f"  • 直接输入自然语言需求，Agent 将在此目录下自主排查代码与执行任务。\n"
-            f"  • 输入 [bold yellow]/terminal[/bold yellow] (或 /sh) 随时挂接进入交互式终端 (按 Ctrl+] 脱离返回)。\n"
-            f"  • 输入 [bold yellow]/server[/bold yellow] 可继续连接其他机器或目录并发开启更多任务！",
-            title="🚀 任务已就绪",
-            border_style="green"
-        ))
+        self.active_session_id = session.session_id
+        console.print(f"[bold green]● Connected to {task_name}[/bold green] [dim]({session.session_type})[/dim]")
+        console.print(f"[dim]● Working directory: [cyan]{work_dir}[/cyan] | Agent: [magenta]{agent_type}[/magenta][/dim]")
+        console.print(f"[dim]● Type natural language prompts to run, or [cyan]/sh[/cyan] to enter interactive terminal.[/dim]\n")
 
     def _prompt_new_server(self):
-        console.print("\n[bold cyan]➕ 录入新的远程 SSH 服务器配置:[/bold cyan]")
+        console.print("\n[bold]● Add New Remote Server[/bold]")
         try:
-            name = input("服务器备注名称 (如 gpu-server-1): ").strip() or "remote-server"
-            host = input("主机 IP 或域名: ").strip()
+            name = input("› Server name (e.g. ustc-gpu): ").strip() or "remote-server"
+            host = input("› Host / IP: ").strip()
             if not host:
-                console.print("[red]主机 IP 不能为空，已取消。[/red]")
+                console.print("[red]Host IP cannot be empty.[/red]")
                 return None
-            port_input = input("SSH 端口 [22]: ").strip() or "22"
-            port = int(port_input) if port_input.isdigit() else 22
-            user = input("登录用户名 [root]: ").strip() or "root"
-            auth = input("认证方式 (password/key) [password]: ").strip().lower() or "password"
+            port_in = input("› Port [22]: ").strip() or "22"
+            port = int(port_in) if port_in.isdigit() else 22
+            user = input("› Username [root]: ").strip() or "root"
+            auth = input("› Auth type (password/key) [password]: ").strip().lower() or "password"
 
             password = ""
             key_path = ""
             if auth in ("key", "k"):
                 auth_type = "key"
-                key_path = input("私钥路径 [~/.ssh/id_rsa]: ").strip() or "~/.ssh/id_rsa"
+                key_path = input("› Private key path [~/.ssh/id_rsa]: ").strip() or "~/.ssh/id_rsa"
             else:
                 auth_type = "password"
-                password = input("SSH 登录密码: ").strip()
+                password = input("› Password: ").strip()
 
-            default_dir = input("默认工作目录 [/workspace]: ").strip() or "/workspace"
+            default_dir = input("› Default directory [/root/workspace]: ").strip() or "/root/workspace"
 
-            return self.config.add_or_update_server(name, host, port, user, auth_type, key_path, password, default_dir)
+            res = self.config.add_or_update_server(name, host, port, user, auth_type, key_path, password, default_dir)
+            # Sync to global ~/.server-helper/setting.json as well
+            try:
+                g_cfg = os.path.expanduser("~/.server-helper/setting.json")
+                if os.path.isfile(g_cfg):
+                    import json
+                    with open(g_cfg, "w", encoding="utf-8") as f:
+                        json.dump(self.config.data, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+            return res
         except (KeyboardInterrupt, EOFError):
-            console.print("[yellow]已取消添加。[/yellow]")
+            console.print("[yellow]Cancelled.[/yellow]")
             return None
 
     def _prompt_remove_server(self):
         servers = self.config.get_servers()
         if not servers:
-            console.print("[dim]当前没有可删除的服务器。[/dim]")
+            console.print("[dim]No servers to remove.[/dim]")
             return
-        console.print("\n[bold red]🗑️ 删除服务器配置:[/bold red]")
+        console.print("\n[bold]● Delete Server[/bold]")
         for idx, s in enumerate(servers, 1):
-            console.print(f"  [{idx}] [cyan]{s.get('name')}[/cyan] ({s.get('user')}@{s.get('host')})")
+            console.print(f"  [{idx}] {s.get('name')} ({s.get('user')}@{s.get('host')})")
         try:
-            choice = input("请输入要删除的服务器编号或名称 (输入 q 取消): ").strip()
+            choice = input("› Select number or name to delete (q to cancel): ").strip()
             if choice.lower() in ("q", "quit", ""):
                 return
             target = None
@@ -489,177 +431,232 @@ class AgentCliApp:
                 target = self.config.get_server(choice)
 
             if target:
-                self.config.remove_server(target.get("id"))
-                console.print(f"[bold green]✅ 已成功从 setting.json 删除服务器 '{target.get('name')}'。[/bold green]")
-            else:
-                console.print(f"[red]找不到服务器 '{choice}'。[/red]")
+                self.config.remove_server(target.get("name"))
+                console.print(f"[green]● Server '{target.get('name')}' removed.[/green]")
         except (KeyboardInterrupt, EOFError):
-            return
+            pass
 
     def action_list_tasks(self):
-        res = api_get("/api/sessions")
-        sessions = res.get("sessions", [])
+        sessions = list(self.session_mgr.sessions.values())
         if not sessions:
-            console.print("[dim]当前没有活跃任务。使用 /connect 连接远程任务。[/dim]")
+            console.print("[dim]● No active sessions. Type /server to connect.[/dim]")
             return
 
-        table = Table(title="🚀 运行中的任务工作区", border_style="cyan")
-        table.add_column("当前", justify="center", style="bold green")
-        table.add_column("任务标识", style="bold cyan")
-        table.add_column("服务器", style="blue")
-        table.add_column("工作目录", style="white")
-        table.add_column("状态", style="green")
-
-        for s in sessions:
-            is_cur = "●" if self.active_session and s.get("session_id") == self.active_session.get("session_id") else ""
-            table.add_row(
-                is_cur,
-                s.get("name"),
-                s.get("server_name", "本地"),
-                s.get("remote_dir", "/"),
-                s.get("status")
-            )
-        console.print(table)
-        console.print("[dim]使用 /switch <名称> 切换当前任务。[/dim]")
+        console.print("\n[bold]● Active Sessions[/bold]\n")
+        active = self._get_active_session()
+        for idx, s in enumerate(sessions, 1):
+            is_active = " [bold green]● current[/bold green]" if (active and s.session_id == active.session_id) else ""
+            target = s.server_info.get("name") if s.server_info else "local"
+            rdir = s.remote_dir or "/"
+            agent = s.command or "agent"
+            console.print(f"  [{idx}] [bold]{s.name:<18}[/bold] [dim]{target:<16}[/dim] [cyan]{rdir:<22}[/cyan] [magenta]{agent:<8}[/magenta] [green]{s.status}[/green]{is_active}")
+        console.print("\n  [dim]Type [cyan]/switch <name|#>[/cyan] to switch, [cyan]/sh[/cyan] to attach terminal[/dim]\n")
 
     def action_switch_task(self, name):
-        res = api_get("/api/sessions")
-        sessions = res.get("sessions", [])
+        sessions = list(self.session_mgr.sessions.values())
         if not sessions:
-            console.print("[dim]当前没有任务运行。[/dim]")
+            console.print("[dim]No active sessions.[/dim]")
             return
 
         if not name:
-            console.print("[bold]可用任务:[/bold]")
-            for idx, s in enumerate(sessions, 1):
-                console.print(f"  [{idx}] {s.get('name')} ({s.get('remote_dir')})")
-            pick = input("输入切换的任务编号或名称: ").strip()
+            self.action_list_tasks()
             try:
-                idx = int(pick) - 1
-                if 0 <= idx < len(sessions):
-                    self.active_session = sessions[idx]
-                    console.print(f"[bold green]已切换到任务: {self.active_session.get('name')}[/bold green]")
-                    return
-            except ValueError:
-                name = pick
-
-        for s in sessions:
-            if s.get("name") == name or s.get("session_id") == name:
-                self.active_session = s
-                console.print(f"[bold green]已切换到任务: {s.get('name')}[/bold green]")
+                name = input("› Switch to (# or name): ").strip()
+            except (KeyboardInterrupt, EOFError):
                 return
 
-        console.print(f"[red]找不到任务 '{name}'。[/red]")
+        target = None
+        try:
+            idx = int(name) - 1
+            if 0 <= idx < len(sessions):
+                target = sessions[idx]
+        except ValueError:
+            for s in sessions:
+                if s.name == name or s.session_id == name:
+                    target = s
+                    break
+
+        if target:
+            self.active_session_id = target.session_id
+            console.print(f"[green]● Switched to session: [bold]{target.name}[/bold][/green]")
+        else:
+            console.print(f"[red]● Session '{name}' not found.[/red]")
 
     def action_open_terminal(self):
-        if not self.active_session:
-            console.print("[yellow]当前未连接到任何任务。请先使用 /connect 连接。[/yellow]")
+        session = self._get_active_session()
+        if not session or not session.backend:
+            console.print("[yellow]● No active session. Type /server to connect first.[/yellow]")
             return
 
-        session_id = self.active_session.get("session_id")
-        name = self.active_session.get("name")
-        agent = self.active_session.get("command") or "agent"
-        rdir = self.active_session.get("remote_dir")
+        console.print(f"\n● [bold]Attached to {session.name}[/bold] ({session.command or 'shell'})")
+        console.print("[dim]Press [bold yellow]Ctrl + ][/bold yellow] to detach and return to Argos prompt[/dim]\n")
 
-        attach_terminal(session_id, name, agent, rdir)
+        # Replay last lines of scrollback if available
+        if session.scrollback:
+            recent = session.scrollback[-4000:]
+            sys.stdout.write(recent)
+            sys.stdout.flush()
+
+        stop_event = threading.Event()
+
+        def on_term_output(text):
+            if not stop_event.is_set():
+                sys.stdout.write(text)
+                sys.stdout.flush()
+
+        session.output_listeners.add(on_term_output)
+
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                while not stop_event.is_set() and session.status == "running":
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getch()
+                        # Ctrl+] (ASCII 29 / 0x1d) detaches
+                        if ch == b'\x1d':
+                            break
+                        # Handle Windows special / arrow keys (0x00 or 0xe0 prefix)
+                        if ch in (b'\x00', b'\xe0'):
+                            ch2 = msvcrt.getch()
+                            # Map arrows to ANSI escape codes
+                            arrow_map = {
+                                b'H': b'\x1b[A',  # Up
+                                b'P': b'\x1b[B',  # Down
+                                b'M': b'\x1b[C',  # Right
+                                b'K': b'\x1b[D',  # Left
+                                b'G': b'\x1b[H',  # Home
+                                b'O': b'\x1b[F',  # End
+                                b'S': b'\x1b[3~', # Delete
+                            }
+                            code = arrow_map.get(ch2, ch + ch2)
+                            session.backend.write(code)
+                        else:
+                            try:
+                                session.backend.write(ch.decode("latin1"))
+                            except Exception:
+                                pass
+                    else:
+                        time.sleep(0.01)
+            else:
+                # Unix raw terminal mode
+                import select
+                while not stop_event.is_set() and session.status == "running":
+                    r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                    if r:
+                        ch = sys.stdin.read(1)
+                        if ch == '\x1d':
+                            break
+                        session.backend.write(ch)
+
+        except Exception as e:
+            console.print(f"\n[red]Terminal error: {e}[/red]")
+        finally:
+            stop_event.set()
+            if on_term_output in session.output_listeners:
+                session.output_listeners.remove(on_term_output)
+            console.print("\n[dim]● [Detached from session][/dim]\n")
 
     def action_set_agent(self, agent_name):
         if not agent_name:
-            console.print("[bold]支持的 Agent:[/bold] claude (Claude Code), agy (Antigravity), codex (LLM API), shell")
+            console.print("[dim]Supported agents: agy, claude, codex, shell[/dim]")
             return
-        if self.active_session:
-            self.active_session["command"] = agent_name
-            console.print(f"[bold green]任务 [{self.active_session.get('name')}] 的 Agent 已设为: {agent_name}[/bold green]")
+        session = self._get_active_session()
+        if session:
+            session.command = agent_name
+            console.print(f"[green]● Active session [{session.name}] agent set to: {agent_name}[/green]")
         else:
             self.config.update_settings({"default_agent": agent_name})
-            console.print(f"[bold green]默认 Agent 已设为: {agent_name}[/bold green]")
+            console.print(f"[green]● Default agent set to: {agent_name}[/green]")
 
     def action_show_status(self):
-        if not self.active_session or self.active_session.get("session_type") != "remote_ssh":
-            console.print("[yellow]当前无活跃远程任务。[/yellow]")
+        session = self._get_active_session()
+        if not session:
+            console.print("[yellow]● No active session.[/yellow]")
             return
 
-        session_id = self.active_session.get("session_id")
-        console.print("[cyan]正在获取远程服务器状态 (GPU / 内存 / CPU)...[/cyan]")
+        console.print(f"● Inspecting environment for [bold cyan]{session.name}[/bold cyan]...")
 
-        # Run check via sftp / exec
-        cmd = "echo '=== GPU ===' && nvidia-smi 2>/dev/null || echo '(无可用 NVIDIA GPU)'; echo '=== 内存 ===' && free -h 2>/dev/null; echo '=== 系统负载 ===' && uptime"
-        api_post(f"/api/sessions/{session_id}/input", {"text": cmd + "\r\n"})
-        time.sleep(0.3)
-        res = api_get("/api/sessions")
-        # Print status summary
-        console.print(Panel(
-            f"任务: [bold cyan]{self.active_session.get('name')}[/bold cyan]\n"
-            f"服务器: {self.active_session.get('server_name')}\n"
-            f"工作目录: {self.active_session.get('remote_dir')}\n"
-            f"Agent: {self.active_session.get('command') or 'claude'}",
-            title="📊 任务状态概览",
-            border_style="blue"
-        ))
+        if session.session_type == "remote_ssh" and hasattr(session.backend, "exec_command"):
+            # Run fast diagnostics over SSH
+            check_cmd = (
+                "echo '=== GPU ===' && (nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader 2>/dev/null || echo '(No NVIDIA GPU)'); "
+                "echo '=== Memory ===' && free -h 2>/dev/null; "
+                "echo '=== Load ===' && uptime"
+            )
+            code, out, err = session.backend.exec_command(check_cmd, cwd=session.remote_dir, timeout=8)
+            console.print("\n" + out.strip() + "\n")
+        else:
+            import psutil
+            cpu = psutil.cpu_percent(interval=0.1)
+            mem = psutil.virtual_memory()
+            console.print(f"  CPU Usage: {cpu}%")
+            console.print(f"  RAM Usage: {mem.percent}% ({round(mem.used/(1024**3), 1)}GB / {round(mem.total/(1024**3), 1)}GB)\n")
 
     def action_broadcast(self, cmd):
         if not cmd:
-            cmd = input("待广播的命令: ").strip()
+            try:
+                cmd = input("› Command to broadcast: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                return
         if not cmd:
             return
-        res = api_post("/api/broadcast", {"command": cmd})
-        console.print(f"[bold green]已向 {res.get('broadcasted_to', 0)} 个运行中的任务广播指令:[/bold green] {cmd}")
+        sessions = [s for s in self.session_mgr.sessions.values() if s.status == "running"]
+        for s in sessions:
+            s.backend.write(cmd + "\n")
+        console.print(f"[green]● Broadcasted to {len(sessions)} active session(s):[/green] {cmd}")
 
+    def action_close_task(self, name):
+        session = self._get_active_session()
+        target_id = None
+        if not name and session:
+            target_id = session.session_id
+            target_name = session.name
+        elif name:
+            for s in self.session_mgr.sessions.values():
+                if s.name == name or s.session_id == name:
+                    target_id = s.session_id
+                    target_name = s.name
+                    break
+
+        if target_id:
+            self.session_mgr.close_session(target_id)
+            if self.active_session_id == target_id:
+                self.active_session_id = None
+            console.print(f"[yellow]● Session [{target_name}] closed.[/yellow]")
+        else:
+            console.print(f"[red]● Session not found: {name}[/red]")
 
     def action_config(self):
         s = self.config.get_settings()
-        agents = self.config.get_agents()
-        console.print(Panel(
-            f"[bold]配置文件路径:[/bold] {self.config.config_path}\n\n"
-            f"[bold cyan]默认 Agent:[/bold cyan] {s.get('default_agent', 'claude')}\n"
-            f"[bold cyan]配置的 Agent 列表:[/bold cyan] {', '.join(agents.keys())}\n"
-            f"[bold cyan]LLM API 模型:[/bold cyan] {agents.get('codex', {}).get('model', 'deepseek-chat')}\n"
-            f"[bold cyan]LLM API Base:[/bold cyan] {agents.get('codex', {}).get('api_base')}\n"
-            f"[dim]直接编辑 setting.json 即可即时生效。[/dim]",
-            title="⚙️ setting.json 配置",
-            border_style="cyan"
-        ))
-
-    def action_close_task(self, name):
-        if not name and self.active_session:
-            name = self.active_session.get("name")
-        if not name:
-            console.print("[yellow]请指定要关闭的任务名称。[/yellow]")
-            return
-
-        res = api_get("/api/sessions")
-        sessions = res.get("sessions", [])
-        for s in sessions:
-            if s.get("name") == name or s.get("session_id") == name:
-                api_post(f"/api/sessions/{s.get('session_id')}/close")
-                console.print(f"[bold yellow]任务 [{name}] 已关闭。[/bold yellow]")
-                if self.active_session and self.active_session.get("session_id") == s.get("session_id"):
-                    self._sync_sessions()
-                return
-
-        console.print(f"[red]未找到任务 [{name}]。[/red]")
+        console.print("\n[bold]● Argos Configuration[/bold]")
+        console.print(f"  Config file:   {self.config.config_path}")
+        console.print(f"  Default agent: {s.get('default_agent', 'agy')}")
+        console.print(f"  Auto reconnect: {s.get('auto_reconnect', True)}")
+        console.print(f"  Servers saved: {len(self.config.get_servers())}\n")
 
     def handle_natural_language_prompt(self, prompt):
-        """Dispatches natural language task to the active session's Agent"""
-        if not self.active_session:
-            console.print("[yellow]提示: 当前未连接任何任务。请先使用 /connect 连接远程服务器工作区。[/yellow]")
+        session = self._get_active_session()
+        if not session:
+            console.print("[dim]● No environment connected. Type [cyan]/server[/cyan] to connect to a local or remote server.[/dim]")
             return
 
-        session_id = self.active_session.get("session_id")
-        agent_type = (self.active_session.get("command") or "claude").lower()
-        rdir = self.active_session.get("remote_dir", "~")
+        agent = (session.command or "agy").lower()
 
-        console.print(f"\n[dim]向任务 [{self.active_session.get('name')}] 下发 Agent 需求...[/dim]")
-
-        if agent_type == "codex":
-            # Autonomous LLM Agent Loop over SSH
-            # Create task via agent engine
-            res = api_post("/api/agent/create", {"session_id": session_id, "prompt": prompt})
-            console.print(f"[bold green]Agent 任务已启动 (ID: {res.get('task_id')})，可通过 /terminal 观察底层动作。[/bold green]")
+        if agent in ("agy", "claude"):
+            # Pass prompt directly into active agent session
+            session.backend.write(prompt + "\n")
+            console.print(f"[dim]● Sent to {agent}. Type [cyan]/sh[/cyan] to enter interactive terminal and see output.[/dim]")
+        elif agent == "shell":
+            # Pass directly to shell
+            session.backend.write(prompt + "\n")
+            time.sleep(0.3)
+            recent = session.scrollback[-2000:]
+            if recent:
+                console.print(recent.strip())
         else:
-            # Send prompt directly into interactive agent CLI (claude / agy)
-            api_post(f"/api/sessions/{session_id}/input", {"text": prompt + "\r\n"})
-            console.print(f"[bold green]需求已下发至 {agent_type} 终端！输入 [bold yellow]/terminal[/bold yellow] 即可实时查看和交互。[/bold green]")
+            # Autonomous agent loop
+            session.backend.write(prompt + "\n")
+            console.print(f"[dim]● Prompt dispatched. Type [cyan]/sh[/cyan] to attach terminal.[/dim]")
 
 
 def main():

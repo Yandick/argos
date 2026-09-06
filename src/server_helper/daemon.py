@@ -24,16 +24,19 @@ def ensure_daemon_running():
     if is_daemon_running():
         return True
 
-    # Find python interpreter
+    # Find python interpreter - prefer pythonw.exe on Windows to guarantee no console window
     python_exe = sys.executable
+    if sys.platform == "win32":
+        pythonw = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
+        if os.path.isfile(pythonw):
+            python_exe = pythonw
 
     # Run app.py or server_helper in background detached process
     script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "app.py")
 
-    # Windows creation flags for detached background process
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+        creationflags = subprocess.CREATE_NO_WINDOW
 
     try:
         subprocess.Popen(

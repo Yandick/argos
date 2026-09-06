@@ -9,7 +9,14 @@ import socket
 import select
 import threading
 import traceback
+import warnings
 import paramiko
+
+try:
+    from cryptography.utils import CryptographyDeprecationWarning
+    warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
+except Exception:
+    pass
 
 
 class SSHSession:
@@ -18,12 +25,13 @@ class SSHSession:
     Streams output in real-time to a callback and receives user/agent input.
     """
 
-    def __init__(self, host, port=22, username="root", password=None, key_path=None, initial_cmd=None, on_output=None, on_close=None):
+    def __init__(self, host, port=22, username="root", password=None, key_path=None, auth_type=None, initial_cmd=None, on_output=None, on_close=None):
         self.host = host
         self.port = int(port)
         self.username = username
         self.password = password
         self.key_path = os.path.expanduser(key_path) if key_path else None
+        self.auth_type = auth_type or ("password" if password else "key")
         self.initial_cmd = initial_cmd
         self.on_output = on_output
         self.on_close = on_close
@@ -49,11 +57,12 @@ class SSHSession:
                 "banner_timeout": 15
             }
 
-            # Auth by private key if provided or exists
             key_loaded = False
-            if self.key_path and os.path.isfile(self.key_path):
+            if self.auth_type == "key" and self.key_path and os.path.isfile(self.key_path):
                 try:
                     connect_kwargs["key_filename"] = self.key_path
+                    connect_kwargs["look_for_keys"] = False
+                    connect_kwargs["allow_agent"] = False
                     self.client.connect(**connect_kwargs)
                     key_loaded = True
                 except Exception as e:
@@ -62,8 +71,9 @@ class SSHSession:
             if not key_loaded:
                 if self.password:
                     connect_kwargs["password"] = self.password
+                    connect_kwargs["look_for_keys"] = False
+                    connect_kwargs["allow_agent"] = False
                 else:
-                    # check default ssh keys
                     for default_key in [os.path.expanduser("~/.ssh/id_rsa"), os.path.expanduser("~/.ssh/id_ed25519")]:
                         if os.path.isfile(default_key):
                             connect_kwargs["key_filename"] = default_key

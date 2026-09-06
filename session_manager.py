@@ -25,6 +25,7 @@ class Session:
 
         self.backend = None
         self.ws_clients = set()
+        self.output_listeners = set()
         self._lock = threading.Lock()
 
     def to_dict(self):
@@ -36,7 +37,7 @@ class Session:
             "remote_dir": self.remote_dir,
             "command": self.command,
             "status": self.status,
-            "connected_clients": len(self.ws_clients),
+            "connected_clients": len(self.ws_clients) + len(self.output_listeners),
             "created_at": self.created_at
         }
 
@@ -46,20 +47,39 @@ class Session:
             if len(self.scrollback) > self.max_scrollback:
                 self.scrollback = self.scrollback[-self.max_scrollback:]
 
-        # Broadcast to attached websockets using IOLoop callback for instant thread-safe delivery
-        import tornado.ioloop
-        loop = tornado.ioloop.IOLoop.current()
-        dead_clients = set()
-        for ws in list(self.ws_clients):
+        # Broadcast to local CLI subscribers (in-process)
+        for listener in list(self.output_listeners):
             try:
-                if loop:
-                    loop.add_callback(ws.write_message, text)
-                else:
-                    ws.write_message(text)
+                listener(text)
             except Exception:
-                dead_clients.add(ws)
-        if dead_clients:
-            self.ws_clients.difference_update(dead_clients)
+                pass
+
+        # Broadcast to attached websockets (if Web UI running)
+        if self.ws_clients:
+            try:
+                import tornado.ioloop
+                loop = tornado.ioloop.IOLoop.current(instance=False)
+                dead_clients = set()
+                for ws in list(self.ws_clients):
+                    try:
+                        if loop:
+                            loop.add_callback(ws.write_message, text)
+                        else:
+                            ws.write_message(text)
+                    except Exception:
+                        dead_clients.add(ws)
+                if dead_clients:
+                    self.ws_clients.difference_update(dead_clients)
+            except Exception:
+                pass
+
+    def close(self):
+        self.status = "closed"
+        if self.backend:
+            try:
+                self.backend.close()
+            except Exception:
+                pass
 
 
 class SessionManager:
@@ -95,19 +115,28 @@ class SessionManager:
             if startup_cmd:
                 full_init_cmd += startup_cmd.strip() + "\n"
 
+            ssh_user = server_info.get("user") or server_info.get("username") or "root"
+            ssh_pass = server_info.get("password") or server_info.get("pass")
+            ssh_key = server_info.get("key_path") or server_info.get("key")
+            ssh_auth = server_info.get("auth_type") or server_info.get("auth")
+
             backend = SSHSession(
                 host=server_info.get("host"),
                 port=server_info.get("port", 22),
-                username=server_info.get("username", "root"),
-                password=server_info.get("password"),
-                key_path=server_info.get("key_path"),
+                username=ssh_user,
+                password=ssh_pass,
+                key_path=ssh_key,
+                auth_type=ssh_auth,
                 initial_cmd=full_init_cmd,
                 on_output=on_output,
                 on_close=on_close
             )
             session.backend = backend
             ok, msg = backend.connect(cols=cols, rows=rows)
-            session.status = "running" if ok else "error"
+            if not ok:
+                session.status = "error"
+                return None, f"SSH 连接失败: {msg}"
+            session.status = "running"
 
         elif session_type == "local_pty":
             backend = LocalPtySession(
@@ -118,7 +147,10 @@ class SessionManager:
             )
             session.backend = backend
             ok, msg = backend.start(cols=cols, rows=rows)
-            session.status = "running" if ok else "error"
+            if not ok:
+                session.status = "error"
+                return None, f"启动本地 PTY 失败: {msg}"
+            session.status = "running"
 
         else:
             return None, f"未知的会话类型: {session_type}"

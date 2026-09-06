@@ -21,9 +21,10 @@ const workspaceVenv = path.join(__dirname, '..', '.venv', isWin ? 'Scripts' : 'b
 const userVenv = path.join(argosHome, 'venv', isWin ? 'Scripts' : 'bin', isWin ? 'argos.exe' : 'argos');
 
 function runExecutable(binPath, args) {
+  const needsShell = isWin && (binPath.endsWith('.cmd') || binPath.endsWith('.bat'));
   const child = spawn(binPath, args, {
     stdio: 'inherit',
-    shell: isWin
+    shell: needsShell
   });
 
   child.on('exit', (code) => {

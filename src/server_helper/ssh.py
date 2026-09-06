@@ -21,23 +21,32 @@ class SSHClientWrapper:
         self.channel = None
         self.is_connected = False
 
+        import warnings
+        try:
+            from cryptography.utils import CryptographyDeprecationWarning
+            warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
+        except Exception:
+            pass
+
     def connect(self, cols=120, rows=30):
         self.client = paramiko.SSHClient()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+        use_pass = (self.auth_type == "password" or bool(self.password))
         connect_kwargs = {
             "hostname": self.host,
             "port": self.port,
             "username": self.user,
-            "timeout": 10,
+            "timeout": 12,
             "banner_timeout": 15,
             "compress": False,
-            "look_for_keys": True
+            "look_for_keys": not use_pass,
+            "allow_agent": not use_pass
         }
 
-        if self.key_path and os.path.isfile(self.key_path):
+        if not use_pass and self.key_path and os.path.isfile(self.key_path):
             connect_kwargs["key_filename"] = self.key_path
-        elif self.password:
+        elif use_pass:
             connect_kwargs["password"] = self.password
         else:
             for default_key in [os.path.expanduser("~/.ssh/id_rsa"), os.path.expanduser("~/.ssh/id_ed25519")]:
