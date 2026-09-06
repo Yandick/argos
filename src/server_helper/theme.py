@@ -14,9 +14,12 @@ THEMES = {
         "success": "#a6e3a1",    # Green
         "warning": "#f9e2af",    # Yellow
         "error": "#f38ba8",      # Red
-        "dim": "#6c7086",        # Overlay0
-        "text": "#cdd6f4",       # Text
+        "dim": "#9399b2",        # Crisp Subtext0
+        "text": "#cdd6f4",       # Clean Text
         "highlight": "#b4befe",  # Lavender
+        "toolbar_bg": "#282c34", # Codex solid dark slate
+        "annotation_cmd": "#4bd1e0",  # Codex cyan
+        "annotation_desc": "#70d6e3", # Crisp cyan
     },
     "tokyo-night": {
         "id": "tokyo-night",
@@ -27,9 +30,12 @@ THEMES = {
         "success": "#9ece6a",    # Green
         "warning": "#e0af68",    # Orange
         "error": "#f7768e",      # Red
-        "dim": "#565f89",        # Comment
+        "dim": "#8990b3",        # Crisp Slate
         "text": "#c0caf5",       # Foreground
         "highlight": "#7dcfff",  # Cyan
+        "toolbar_bg": "#282c34",
+        "annotation_cmd": "#4bd1e0",
+        "annotation_desc": "#70d6e3",
     },
     "dracula": {
         "id": "dracula",
@@ -40,9 +46,12 @@ THEMES = {
         "success": "#50fa7b",    # Green
         "warning": "#f1fa8c",    # Yellow
         "error": "#ff5555",      # Red
-        "dim": "#6272a4",        # Comment
+        "dim": "#a4b9ef",        # Crisp Lilac
         "text": "#f8f8f2",       # Foreground
         "highlight": "#8be9fd",  # Cyan
+        "toolbar_bg": "#282c34",
+        "annotation_cmd": "#4bd1e0",
+        "annotation_desc": "#70d6e3",
     },
     "nord": {
         "id": "nord",
@@ -53,9 +62,12 @@ THEMES = {
         "success": "#a3be8c",    # Green
         "warning": "#ebcb8b",    # Yellow
         "error": "#bf616a",      # Red
-        "dim": "#616e88",        # Slate
+        "dim": "#94a3b8",        # Crisp Frost Slate
         "text": "#eceff4",       # Snow Storm
         "highlight": "#8fbcbb",  # Teal
+        "toolbar_bg": "#282c34",
+        "annotation_cmd": "#4bd1e0",
+        "annotation_desc": "#70d6e3",
     },
     "gruvbox": {
         "id": "gruvbox",
@@ -66,9 +78,12 @@ THEMES = {
         "success": "#b8bb26",    # Green
         "warning": "#fabd2f",    # Yellow
         "error": "#fb4934",      # Red
-        "dim": "#928374",        # Gray
+        "dim": "#bdae93",        # Crisp Sand
         "text": "#ebdbb2",       # Light
         "highlight": "#8ec07c",  # Aqua
+        "toolbar_bg": "#282c34",
+        "annotation_cmd": "#4bd1e0",
+        "annotation_desc": "#70d6e3",
     },
     "monokai": {
         "id": "monokai",
@@ -79,9 +94,12 @@ THEMES = {
         "success": "#a6e22e",    # Green
         "warning": "#fd971f",    # Orange
         "error": "#f92672",      # Pink
-        "dim": "#75715e",        # Gray
+        "dim": "#a6a28c",        # Crisp Warm Stone
         "text": "#f8f8f2",       # White
         "highlight": "#e6db74",  # Yellow
+        "toolbar_bg": "#282c34",
+        "annotation_cmd": "#4bd1e0",
+        "annotation_desc": "#70d6e3",
     },
     "cyberpunk": {
         "id": "cyberpunk",
@@ -92,9 +110,12 @@ THEMES = {
         "success": "#00ff66",    # Matrix
         "warning": "#ffff00",    # Yellow
         "error": "#ff0055",      # Neon Pink
-        "dim": "#336644",        # Dark Green
+        "dim": "#6ee7b7",        # Crisp Mint
         "text": "#e0ffe0",       # Light Green
         "highlight": "#d600ff",  # Magenta
+        "toolbar_bg": "#282c34",
+        "annotation_cmd": "#4bd1e0",
+        "annotation_desc": "#70d6e3",
     },
     "minimal": {
         "id": "minimal",
@@ -105,9 +126,12 @@ THEMES = {
         "success": "#86efac",    # Mint-300
         "warning": "#fde047",    # Yellow-300
         "error": "#fca5a5",      # Red-300
-        "dim": "#71717a",        # Zinc-500
+        "dim": "#a1a1aa",        # Crisp Zinc-400
         "text": "#f4f4f5",       # Zinc-100
         "highlight": "#ffffff",  # White
+        "toolbar_bg": "#282c34",
+        "annotation_cmd": "#4bd1e0",
+        "annotation_desc": "#70d6e3",
     }
 }
 
@@ -138,18 +162,14 @@ def get_prompt_toolkit_style(theme):
     s = theme["success"]
     d = theme["dim"]
     txt = theme.get("text", "#ffffff")
+    tb_bg = theme.get("toolbar_bg", "#282c34")
     return Style.from_dict({
         "prompt": f"{p} bold",
         "badge": f"{s} bold",
         "dim": f"{d}",
         "accent": f"{a}",
-        "bottom-toolbar": f"bg:#181825 fg:{d}",
-        "completion-menu": f"bg:#1e1e2e fg:{txt}",
-        "completion-menu.completion": f"fg:{txt}",
-        "completion-menu.completion.current": f"bg:{p} fg:#11111b bold",
-        "completion-menu.meta.completion": f"fg:{d}",
-        "completion-menu.meta.completion.current": f"bg:{p} fg:#1e1e2e",
-        "scrollbar.background": f"bg:#181825",
-        "scrollbar.button": f"bg:{d}",
+        "bottom-toolbar": f"bg:{tb_bg} fg:{txt}",
+        "bottom-toolbar.text": f"bg:{tb_bg} fg:{txt}",
     })
+
 

@@ -26,8 +26,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.output import create_output, DummyOutput
@@ -53,21 +55,21 @@ from session_manager import SessionManager
 console = Console()
 
 COMMAND_REGISTRY = [
-    {"cmd": "/server",    "cat": "Remote", "desc": "切换或管理远程目标服务器 (scut-gpu 等)"},
-    {"cmd": "/files",     "cat": "Remote", "desc": "浏览工作区文件与目录树 (免耗 token)"},
-    {"cmd": "/sh",        "cat": "Remote", "desc": "连接全功能交互式终端 (Ctrl+] 返回)"},
-    {"cmd": "/model",     "cat": "Agent",  "desc": "切换活跃 LLM 模型 (gemini-3.8-flash 等)"},
-    {"cmd": "/effort",    "cat": "Agent",  "desc": "调节思考推理深度 (high/med/low/off)"},
-    {"cmd": "/proxy",     "cat": "System", "desc": "配置 HTTP 代理与 SSH 反向隧道 (10808/7897)"},
-    {"cmd": "/tasks",     "cat": "Tasks",  "desc": "查看后台任务运行看板与活动状态"},
-    {"cmd": "/switch",    "cat": "Tasks",  "desc": "在多个服务器/本地会话之间快速切换"},
-    {"cmd": "/broadcast", "cat": "Remote", "desc": "向全部活跃并发会话广播执行 Shell 命令"},
-    {"cmd": "/status",    "cat": "System", "desc": "查看目标环境 GPU、显存与系统负载"},
-    {"cmd": "/theme",     "cat": "System", "desc": "切换界面配色主题 (带实时动态预览)"},
-    {"cmd": "/config",    "cat": "System", "desc": "查看 setting.json 配置详情"},
-    {"cmd": "/clear",     "cat": "System", "desc": "清屏并重新绘制状态看板"},
-    {"cmd": "/help",      "cat": "System", "desc": "查看完整指令与快捷键指南"},
-    {"cmd": "/exit",      "cat": "System", "desc": "安全退出 Argos 并释放所有连接"},
+    {"cmd": "/server",    "cat": "Remote", "desc": "切换或管理远程目标服务器 (scut-gpu 等)", "usage": "[scut-gpu|add|rename|rm]"},
+    {"cmd": "/files",     "cat": "Remote", "desc": "浏览工作区文件与目录树 (免耗 token)", "usage": "[路径可选]"},
+    {"cmd": "/sh",        "cat": "Remote", "desc": "连接全功能交互式终端 (Ctrl+] 返回)", "usage": ""},
+    {"cmd": "/model",     "cat": "Agent",  "desc": "切换活跃 LLM 模型 (gemini-3.8-flash 等)", "usage": "[gemini-3.8-flash|claude-3-7-sonnet|...]"},
+    {"cmd": "/effort",    "cat": "Agent",  "desc": "调节思考推理深度 (high/med/low/off)", "usage": "[high|medium|low|off]"},
+    {"cmd": "/proxy",     "cat": "System", "desc": "配置 HTTP 代理与 SSH 反向隧道 (10808/7897)", "usage": "[http://127.0.0.1:7897|off]"},
+    {"cmd": "/tasks",     "cat": "Tasks",  "desc": "查看后台任务运行看板与活动状态", "usage": ""},
+    {"cmd": "/switch",    "cat": "Tasks",  "desc": "在多个服务器/本地会话之间快速切换", "usage": "[会话名]"},
+    {"cmd": "/broadcast", "cat": "Remote", "desc": "向全部活跃并发会话广播执行 Shell 命令", "usage": "<shell 指令>"},
+    {"cmd": "/status",    "cat": "System", "desc": "查看目标环境 GPU、显存与系统负载", "usage": ""},
+    {"cmd": "/theme",     "cat": "System", "desc": "切换界面配色主题 (带实时动态预览)", "usage": "[主题名]"},
+    {"cmd": "/config",    "cat": "System", "desc": "查看 setting.json 配置详情", "usage": ""},
+    {"cmd": "/clear",     "cat": "System", "desc": "清屏并重新绘制状态看板", "usage": ""},
+    {"cmd": "/help",      "cat": "System", "desc": "查看完整指令与快捷键指南", "usage": ""},
+    {"cmd": "/exit",      "cat": "System", "desc": "安全退出 Argos 并释放所有连接", "usage": ""},
 ]
 
 SLASH_COMMANDS = [item["cmd"] for item in COMMAND_REGISTRY]
@@ -111,34 +113,178 @@ class AgentCliApp:
         self.theme_id = self.config.get_settings().get("theme", "catppuccin")
         self.theme = get_theme(self.theme_id)
 
+        self._tab_cycle_state = None
+        self._last_sigint_time = 0.0
+
         self._init_prompt_session()
 
     def _render_bottom_toolbar(self):
-        session = self._get_active_session()
-        p = self.theme["primary"]
-        s = self.theme["success"]
-        d = self.theme["dim"]
-        a = self.theme["accent"]
-        if session:
-            srv = session.name
-            rdir = session.remote_dir or "/"
-            if len(rdir) > 26:
-                rdir = "..." + rdir[-23:]
-            agent = session.command or "agy"
-            model = getattr(session, "model", "") or self.config.get_model(agent)
+        try:
+            cmd_col = self.theme.get("annotation_cmd", "#4bd1e0")
+            desc_col = self.theme.get("annotation_desc", "#70d6e3")
+            dim_col = self.theme.get("dim", "#9399b2")
+            err_col = self.theme.get("error", "#f38ba8")
+
+            # Check current text in prompt buffer
+            curr_text = ""
+            if self.session_prompt and hasattr(self.session_prompt, "default_buffer"):
+                curr_text = self.session_prompt.default_buffer.text
+            if not curr_text:
+                try:
+                    from prompt_toolkit.application.current import get_app
+                    app = get_app()
+                    if app and app.current_buffer:
+                        curr_text = app.current_buffer.text
+                except Exception:
+                    pass
+
+            curr_text = (curr_text or "").strip()
+
+            # If user is typing a slash command, show the clean Codex-style annotation line
+            if curr_text.startswith("/"):
+                parts = curr_text.split(maxsplit=1)
+                raw_cmd = parts[0].lower()
+
+                # If user typed command and space (e.g. "/model ")
+                if " " in curr_text:
+                    matched_item = next((item for item in COMMAND_REGISTRY if item["cmd"].lower() == raw_cmd), None)
+                    if matched_item:
+                        usage = matched_item.get("usage", "")
+                        usage_str = f" <style fg='{dim_col}'>{usage}</style>" if usage else ""
+                        return HTML(
+                            f'<style fg="{cmd_col}"><b>{matched_item["cmd"]}</b></style>   '
+                            f'<style fg="{desc_col}">{matched_item["desc"]}</style>'
+                            f'{usage_str}'
+                        )
+
+                # Match prefix (e.g. "/serv", "/ser", "/s", "/")
+                matches = [item for item in COMMAND_REGISTRY if item["cmd"].lower().startswith(raw_cmd)]
+                if not matches:
+                    matches = [item for item in COMMAND_REGISTRY if raw_cmd in item["cmd"].lower()]
+
+                if matches:
+                    top = matches[0]
+                    if self._tab_cycle_state and self._tab_cycle_state.get("type") == "cmd":
+                        idx = self._tab_cycle_state.get("index", 0)
+                        if idx < len(matches):
+                            top = matches[idx]
+
+                    hint = ""
+                    if len(matches) > 1:
+                        hint = f"   <style fg='{dim_col}'>([Tab] 切换候选 · 共 {len(matches)} 项)</style>"
+                    elif raw_cmd == "/":
+                        hint = f"   <style fg='{dim_col}'>([Tab] 顺序切换 · 共 {len(matches)} 项)</style>"
+
+                    return HTML(
+                        f'<style fg="{cmd_col}"><b>{top["cmd"]}</b></style>   '
+                        f'<style fg="{desc_col}">{top["desc"]}</style>'
+                        f'{hint}'
+                    )
+                else:
+                    return HTML(f'<style fg="{err_col}">未知命令: {raw_cmd} (输入 /help 查看命令列表)</style>')
+
+            # Normal status bar when not typing slash command
+            session = self._get_active_session()
+            p = self.theme["primary"]
+            s = self.theme["success"]
+            d = self.theme["dim"]
+            a = self.theme["accent"]
+            if session:
+                srv = session.name
+                rdir = session.remote_dir or "/"
+                if len(rdir) > 26:
+                    rdir = "..." + rdir[-23:]
+                agent = session.command or "agy"
+                model = getattr(session, "model", "") or self.config.get_model(agent)
+                return HTML(
+                    f'<style fg="{s}">● {srv}</style> '
+                    f'<style fg="{d}">│</style> '
+                    f'<style fg="{p}">📁 {rdir}</style> '
+                    f'<style fg="{d}">│</style> '
+                    f'<style fg="{a}">🤖 {agent}:{model}</style> '
+                    f'<style fg="{d}">│ [Tab] 命令提示</style>'
+                )
+            proxy = self.config.get_proxy()
+            proxy_tag = f"proxy: {proxy}" if proxy else "direct"
             return HTML(
-                f'<style fg="{s}">● {srv}</style> '
-                f'<style fg="{d}">|</style> '
-                f'<style fg="{p}">📁 {rdir}</style> '
-                f'<style fg="{d}">|</style> '
-                f'<style fg="{a}">🤖 {agent}:{model}</style> '
-                f'<style fg="{d}">| [Tab] Commands</style>'
+                f'<style fg="{d}">● idle │ 输入 /server 连接目标环境 │ {proxy_tag} │ [Tab] 命令提示</style>'
             )
-        proxy = self.config.get_proxy()
-        proxy_tag = f"proxy: {proxy}" if proxy else "direct"
-        return HTML(
-            f'<style fg="{d}">● idle | Type /server to connect | {proxy_tag} | [Tab] Commands</style>'
-        )
+        except Exception:
+            return HTML('<style fg="#9399b2">Argos Agent Orchestrator</style>')
+
+    def _cycle_tab_completion(self, buf, backward=False):
+        text = buf.text
+        if not text.startswith("/"):
+            return False
+
+        is_cycling_cmd = (self._tab_cycle_state and self._tab_cycle_state.get("type") == "cmd")
+        has_space = " " in text
+
+        # If user is typing arguments (after command and space)
+        if has_space and not is_cycling_cmd:
+            parts = text.split(maxsplit=1)
+            cmd = parts[0].lower()
+            arg = parts[1] if len(parts) > 1 else ""
+            arg_lower = arg.lower()
+
+            candidate_args = []
+            if cmd == "/model":
+                candidate_args = [m["label"] for m in POPULAR_MODELS]
+            elif cmd in ("/effort", "/thinking"):
+                candidate_args = ["high", "medium", "low", "off"]
+            elif cmd == "/theme":
+                candidate_args = [t["id"] for t in list_themes()]
+            elif cmd in ("/server", "/connect", "/c"):
+                candidate_args = [s.get("name", "") for s in self.config.get_servers() if s.get("name")]
+            elif cmd in ("/close", "/stop", "/switch", "/sw"):
+                candidate_args = [s.name for s in self.session_mgr.sessions.values()]
+
+            if candidate_args:
+                if (self._tab_cycle_state and self._tab_cycle_state.get("type") == "arg" and
+                        self._tab_cycle_state.get("cmd") == cmd and
+                        arg in self._tab_cycle_state.get("matches", [])):
+                    matches = self._tab_cycle_state["matches"]
+                    idx = (self._tab_cycle_state["index"] + (-1 if backward else 1)) % len(matches)
+                    chosen = matches[idx]
+                    self._tab_cycle_state["index"] = idx
+                else:
+                    matches = [a for a in candidate_args if a.lower().startswith(arg_lower)]
+                    if not matches:
+                        matches = [a for a in candidate_args if arg_lower in a.lower()]
+                    if not matches:
+                        return False
+                    idx = 0
+                    chosen = matches[0]
+                    self._tab_cycle_state = {"type": "arg", "cmd": cmd, "matches": matches, "index": 0}
+
+                new_text = f"{cmd} {chosen}"
+                buf.document = Document(new_text, cursor_position=len(new_text))
+                return True
+            return False
+
+        # Command completion
+        parts = text.split(maxsplit=1)
+        query = parts[0].strip().lower()
+        all_cmds = [item["cmd"] for item in COMMAND_REGISTRY]
+
+        if (self._tab_cycle_state and self._tab_cycle_state.get("type") == "cmd" and
+                query in self._tab_cycle_state.get("matches", [])):
+            matches = self._tab_cycle_state["matches"]
+            idx = (self._tab_cycle_state["index"] + (-1 if backward else 1)) % len(matches)
+            chosen = matches[idx]
+            self._tab_cycle_state["index"] = idx
+        else:
+            matches = [c for c in all_cmds if c.startswith(query)]
+            if not matches:
+                matches = [c for c in all_cmds if query in c]
+            if not matches:
+                return False
+            idx = 0
+            chosen = matches[0]
+            self._tab_cycle_state = {"type": "cmd", "matches": matches, "index": 0}
+
+        buf.document = Document(chosen, cursor_position=len(chosen))
+        return True
 
     def _init_prompt_session(self):
         try:
@@ -153,10 +299,42 @@ class AgentCliApp:
 
         pt_style = get_prompt_toolkit_style(self.theme)
 
+        bindings = KeyBindings()
+
+        @bindings.add("tab")
+        def _(event):
+            buf = event.current_buffer
+            if not self._cycle_tab_completion(buf, backward=False):
+                buf.insert_text("  ")
+
+        @bindings.add("s-tab")
+        def _(event):
+            buf = event.current_buffer
+            self._cycle_tab_completion(buf, backward=True)
+
+        @bindings.add("backspace")
+        def _(event):
+            buf = event.current_buffer
+            buf.delete_before_cursor(count=1)
+            self._tab_cycle_state = None
+
+        @bindings.add("delete")
+        def _(event):
+            buf = event.current_buffer
+            buf.delete(count=1)
+            self._tab_cycle_state = None
+
+        @bindings.add("escape")
+        def _(event):
+            buf = event.current_buffer
+            buf.text = ""
+            self._tab_cycle_state = None
+
         try:
             self.session_prompt = PromptSession(
                 history=FileHistory(self.history_file),
-                completer=ArgosSlashCompleter(),
+                completer=None,
+                key_bindings=bindings,
                 bottom_toolbar=self._render_bottom_toolbar,
                 output=pt_out,
                 input=pt_in,
@@ -212,7 +390,7 @@ class AgentCliApp:
             f"  [{a}]Engine:[/{a}]    [{txt}]{agent_str}[/{txt}] [{d}](effort: {effort})[/{d}]\n"
             f"  [{a}]Proxy:[/{a}]     {proxy_str}\n"
             f"  [{a}]Theme:[/{a}]     [{txt}]{t_name}[/{txt}] {swatch}\n\n"
-            f"[{d}]Shortcuts: [/][{a}]/server[/] [{d}]target[dim] · [/][{a}]/files[/] [{d}]files[dim] · [/][{a}]/sh[/] [{d}]terminal[dim] · [/][{a}]/model[/] [{d}]models[dim] · [/][{a}]/proxy[/] [{d}]proxy[dim] · [/][{a}]/help[/] [{d}]help[dim]"
+            f"[{d}]Shortcuts:[/{d}] [{a}]/server[/{a}] [{d}]target[/{d}] · [{a}]/files[/{a}] [{d}]files[/{d}] · [{a}]/sh[/{a}] [{d}]terminal[/{d}] · [{a}]/model[/{a}] [{d}]models[/{d}] · [{a}]/proxy[/{a}] [{d}]proxy[/{d}] · [{a}]/help[/{a}] [{d}]help[/{d}]"
         )
         return Panel(card, border_style=p, padding=(0, 1))
 
@@ -221,10 +399,13 @@ class AgentCliApp:
         console.print(self.render_header())
         console.print()
 
+        self._last_sigint_time = 0.0
+
         while True:
             try:
                 prompt_text = self._build_prompt()
                 user_input = self._get_user_input(prompt_text)
+                self._last_sigint_time = 0.0
 
                 if not user_input:
                     continue
@@ -237,8 +418,27 @@ class AgentCliApp:
                 else:
                     self.handle_natural_language_prompt(user_input)
 
-            except (KeyboardInterrupt, EOFError):
-                console.print("\n[dim]Use /exit to quit Argos.[/dim]")
+            except KeyboardInterrupt:
+                now = time.time()
+                if (now - self._last_sigint_time) < 2.0:
+                    console.print(f"\n[{self.theme['dim']}]Argos session closed. Goodbye![/{self.theme['dim']}]")
+                    for s in list(self.session_mgr.sessions.values()):
+                        try:
+                            s.close()
+                        except Exception:
+                            pass
+                    sys.exit(0)
+                else:
+                    self._last_sigint_time = now
+                    console.print(f"\n[{self.theme['warning']}]Press Ctrl+C again to exit, or type /exit[/{self.theme['warning']}]")
+            except EOFError:
+                console.print(f"\n[{self.theme['dim']}]Argos session closed. Goodbye![/{self.theme['dim']}]")
+                for s in list(self.session_mgr.sessions.values()):
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+                sys.exit(0)
             except Exception as e:
                 console.print(f"[{self.theme['error']}]● Error:[/{self.theme['error']}] {e}")
 
@@ -281,6 +481,18 @@ class AgentCliApp:
         return HTML(f'<style fg="{p}">●</style> <b>argos</b> <style fg="{a}">›</style> ')
 
     def handle_slash_command(self, cmd, arg):
+        known_cmds = [
+            "/exit", "/quit", "/help", "/clear", "/server", "/connect", "/c",
+            "/theme", "/model", "/effort", "/thinking", "/proxy", "/files",
+            "/ls", "/dir", "/tasks", "/sessions", "/switch", "/sw", "/terminal",
+            "/term", "/sh", "/agent", "/status", "/broadcast", "/b", "/config",
+            "/close", "/stop"
+        ]
+        if cmd not in known_cmds:
+            candidates = [c for c in SLASH_COMMANDS if c.startswith(cmd)]
+            if len(candidates) == 1:
+                cmd = candidates[0]
+
         if cmd in ("/exit", "/quit"):
             console.print("[dim]Exiting Argos. Sessions closed.[/dim]")
             for s in list(self.session_mgr.sessions.values()):
