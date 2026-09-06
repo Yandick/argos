@@ -89,8 +89,8 @@ class ArgosSlashCompleter(Completer):
 
 
 POPULAR_MODELS = [
-    {"label": "gemini-3.8-flash", "desc": "Google flagship default model (ultra fast & smart)"},
-    {"label": "gemini-3.8-pro",   "desc": "Google top-tier deep reasoning & multimodal model"},
+    {"label": "gemini-3.8-flash", "desc": "Google latest flagship default model (ultra fast & smart)"},
+    {"label": "gemini-3.1-pro",   "desc": "Google top-tier deep reasoning pro model"},
     {"label": "claude-3-7-sonnet", "desc": "Anthropic latest hybrid reasoning & coding model"},
     {"label": "claude-3-5-sonnet", "desc": "Industry standard programming benchmark model"},
     {"label": "deepseek-r1",       "desc": "Open-weight deep reasoning model"},
