@@ -37,6 +37,6 @@
     "src/",
     "README.md",
     "pyproject.toml",
-    "setting.json"
+    "setting.example.json"
   ]
 }

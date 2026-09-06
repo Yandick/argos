@@ -16,12 +16,30 @@ if sys.platform == "win32":
 import json
 import psutil
 import webbrowser
+from collections import defaultdict
+from urllib.parse import urlparse
 import tornado.ioloop
 import tornado.web
 import tornado.websocket
 from config_manager import ConfigManager
 from session_manager import SessionManager
 from agent_engine import AgentEngine
+
+# Hosts considered same-machine. The server binds to 127.0.0.1, so only these
+# origins are trusted for cross-origin WebSocket / API access. This blocks a
+# malicious web page from driving the user's SSH sessions via their browser.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+
+def _is_local_origin(origin):
+    if not origin:
+        # Non-browser clients (CLI, curl) send no Origin header; allow them.
+        return True
+    try:
+        host = urlparse(origin).hostname
+    except Exception:
+        return False
+    return host in _LOCAL_HOSTS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -33,7 +51,12 @@ agent_engine = AgentEngine(config_mgr, session_mgr)
 
 class BaseHandler(tornado.web.RequestHandler):
     def set_default_headers(self):
-        self.set_header("Access-Control-Allow-Origin", "*")
+        # Only echo CORS for local origins; never use a wildcard, which would let
+        # any website read responses / issue commands to this local server.
+        origin = self.request.headers.get("Origin")
+        if _is_local_origin(origin) and origin:
+            self.set_header("Access-Control-Allow-Origin", origin)
+            self.set_header("Vary", "Origin")
         self.set_header("Access-Control-Allow-Headers", "x-requested-with, content-type")
         self.set_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, DELETE")
 
@@ -55,6 +78,7 @@ class StatusHandler(BaseHandler):
 
         self.write_json({
             "success": True,
+            "server": "argos",  # identity marker so daemon.py can tell us apart from any other service on the port
             "memory_mb": mem_mb,
             "cpu_percent": cpu_pct,
             "active_sessions": len(session_mgr.sessions),
@@ -220,7 +244,7 @@ class SftpHandler(BaseHandler):
 
 class TerminalWebSocketHandler(tornado.websocket.WebSocketHandler):
     def check_origin(self, origin):
-        return True
+        return _is_local_origin(origin)
 
     def open(self, session_id):
         self.session_id = session_id
@@ -230,31 +254,35 @@ class TerminalWebSocketHandler(tornado.websocket.WebSocketHandler):
             self.close()
 
     def on_message(self, message):
-        # Check if control packet (e.g. resize)
-        if message.startswith("{") and message.endswith("}"):
+        # Control packets are JSON objects carrying a "type" field (e.g. resize).
+        # Anything else — including text a user types that happens to look like
+        # JSON — is forwarded verbatim to the terminal.
+        if isinstance(message, str) and message.lstrip().startswith("{"):
             try:
                 data = json.loads(message)
-                if data.get("type") == "resize":
-                    cols = int(data.get("cols", 120))
-                    rows = int(data.get("rows", 30))
-                    session_mgr.resize(self.session_id, cols, rows)
-                    return
             except Exception:
-                pass
+                data = None
+            if isinstance(data, dict) and "type" in data:
+                if data.get("type") == "resize":
+                    try:
+                        cols = int(data.get("cols", 120))
+                        rows = int(data.get("rows", 30))
+                        session_mgr.resize(self.session_id, cols, rows)
+                    except Exception:
+                        pass
+                return
 
         # Regular user typing / keystrokes
         session_mgr.write(self.session_id, message)
 
 class AgentWebSocketHandler(tornado.websocket.WebSocketHandler):
-    connections = {}  # session_id -> set of ws instances
+    connections = defaultdict(set)  # session_id -> set of ws instances
 
     def check_origin(self, origin):
-        return True
+        return _is_local_origin(origin)
 
     def open(self, session_id):
         self.session_id = session_id
-        if session_id not in self.connections:
-            self.connections[session_id] = set()
         self.connections[session_id].add(self)
         self.write_json({"event": "connected", "session_id": session_id})
 
@@ -285,6 +313,9 @@ class AgentWebSocketHandler(tornado.websocket.WebSocketHandler):
                 task_id = data.get("task_id")
                 if task_id:
                     agent_engine.stop_task(task_id)
+                else:
+                    # UI stop button doesn't track task_id; stop by session.
+                    agent_engine.stop_tasks_for_session(self.session_id)
         except Exception as e:
             self.write_json({"event": "error", "message": str(e)})
 
@@ -373,7 +404,21 @@ def run_server(port=8765, open_browser=True):
                 pass
         tornado.ioloop.IOLoop.current().call_later(0.8, _open)
 
-    tornado.ioloop.IOLoop.current().start()
+    try:
+        tornado.ioloop.IOLoop.current().start()
+    except (KeyboardInterrupt, SystemExit):
+        print("\n正在关闭服务并释放所有会话资源...")
+    finally:
+        # Gracefully close every backend so remote shells aren't left as zombies
+        # and local PTY child processes don't become orphans.
+        try:
+            for sid in list(session_mgr.sessions.keys()):
+                try:
+                    session_mgr.close_session(sid)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

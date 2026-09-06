@@ -10,7 +10,9 @@ class App {
     this.settings = {};
     this.viewMode = 'terminal'; // 'agent', 'terminal', 'split'
     this.agentSockets = {};    // sessionId -> WebSocket
+    this.agentRetryDelay = {}; // sessionId -> current backoff (ms)
     this.currentRemotePath = '';
+    this._pollTimer = null;
 
     this.init();
   }
@@ -57,8 +59,40 @@ class App {
     if (data) {
       this.servers = data.servers || [];
       this.settings = data.settings || {};
+      // Adopt the backend-configured language only if the user hasn't already
+      // made an explicit choice in this browser.
+      if (window.i18n && this.settings.language && !window.i18n.hasUserChoice()) {
+        window.i18n.setLang(this.settings.language, { persistBackend: false });
+      }
       this.renderServerDropdown();
     }
+  }
+
+  /* ---------------- Language ---------------- */
+
+  // Called by i18n after a language change so dynamic (JS-rendered) UI updates.
+  onLanguageChanged() {
+    this.renderServerDropdown();
+    this.renderSidebarTasks();
+    if (document.getElementById('modal-servers').classList.contains('show')) {
+      this.renderServersList();
+    }
+  }
+
+  // Best-effort mirror of the language choice into the backend setting.
+  async persistLanguage(lang) {
+    try {
+      await this.fetchJson('/api/config', {
+        method: 'POST',
+        body: JSON.stringify({ settings: { language: lang } })
+      });
+    } catch (e) {}
+  }
+
+  // Prompt chip click: fill the input with the localized prompt text.
+  fillPromptI18n(el) {
+    const key = el && el.getAttribute ? el.getAttribute('data-prompt') : null;
+    if (key) this.fillPrompt(window.t(key));
   }
 
   renderServerDropdown() {
@@ -66,7 +100,10 @@ class App {
     if (!select) return;
     select.innerHTML = '';
     if (this.servers.length === 0) {
-      select.innerHTML = '<option value="">(尚未添加服务器，请先点击管理服务器)</option>';
+      const emptyOpt = document.createElement('option');
+      emptyOpt.value = '';
+      emptyOpt.textContent = window.t('servers.noneConfigured');
+      select.appendChild(emptyOpt);
       return;
     }
     this.servers.forEach(s => {
@@ -99,7 +136,7 @@ class App {
     if (res && res.success) {
       this.settings = res.config.settings;
       this.closeModal('modal-settings');
-      alert('大模型配置已保存！');
+      alert(window.t('settings.saved'));
     }
   }
 
@@ -124,7 +161,10 @@ class App {
     list.innerHTML = '';
 
     if (this.sessions.length === 0) {
-      list.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; padding: 8px 4px;">暂无运行中的任务</div>';
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color: var(--text-muted); font-size: 12px; padding: 8px 4px;';
+      empty.textContent = window.t('tasks.empty');
+      list.appendChild(empty);
       return;
     }
 
@@ -134,17 +174,18 @@ class App {
       item.onclick = () => this.selectTask(s.session_id);
 
       const isSSH = s.session_type === 'remote_ssh';
-      const desc = isSSH ? `${s.server_name} | ${s.remote_dir || '/'}` : '本地命令行进程';
+      const desc = isSSH ? `${s.server_name} | ${s.remote_dir || '/'}` : window.t('task.localProcess');
+      const statusClass = String(s.status || 'running').replace(/[^a-z0-9_-]/gi, '');
 
       item.innerHTML = `
         <div class="task-item-top">
           <div class="task-item-title">
-            <div class="status-dot status-${s.status || 'running'}"></div>
-            <span>${s.name}</span>
+            <div class="status-dot status-${statusClass}"></div>
+            <span>${this.escapeHtml(s.name)}</span>
           </div>
           <span style="font-size: 10px; color: var(--text-muted);">${isSSH ? 'SSH' : 'LOCAL'}</span>
         </div>
-        <div class="task-item-desc" title="${desc}">${desc}</div>
+        <div class="task-item-desc" title="${this.escapeHtml(desc)}">${this.escapeHtml(desc)}</div>
       `;
       list.appendChild(item);
     });
@@ -165,7 +206,7 @@ class App {
     document.getElementById('active-task-name').textContent = session.name;
     const pathText = session.session_type === 'remote_ssh'
       ? `${session.server_name} : ${session.remote_dir || '/'}`
-      : `本地进程: ${session.command || 'PowerShell'}`;
+      : `${window.t('task.localPrefix')}${session.command || 'PowerShell'}`;
     document.getElementById('active-task-path').textContent = pathText;
 
     // Show/hide file drawer button
@@ -234,7 +275,7 @@ class App {
 
   async closeCurrentTask() {
     if (!this.activeSessionId) return;
-    if (!confirm('确定关闭此任务工作区吗？相关的终端与会话将一并释放。')) return;
+    if (!confirm(window.t('confirm.closeTask'))) return;
 
     const id = this.activeSessionId;
     await this.fetchJson(`/api/sessions/${id}/close`, { method: 'POST' });
@@ -244,9 +285,11 @@ class App {
     if (pane) pane.remove();
 
     if (this.agentSockets[id]) {
+      this.agentSockets[id]._intentionalClose = true;
       this.agentSockets[id].close();
       delete this.agentSockets[id];
     }
+    delete this.agentRetryDelay[id];
 
     this.sessions = this.sessions.filter(s => s.session_id !== id);
     this.activeSessionId = this.sessions.length > 0 ? this.sessions[0].session_id : null;
@@ -276,7 +319,7 @@ class App {
   }
 
   async submitCreateTask() {
-    const name = document.getElementById('task-name').value.trim() || '新任务';
+    const name = document.getElementById('task-name').value.trim() || window.t('newTask.defaultName');
     const mode = document.getElementById('task-mode').value;
 
     let payload = { session_type: mode, name: name };
@@ -284,7 +327,7 @@ class App {
     if (mode === 'remote_ssh') {
       const serverId = document.getElementById('task-server-id').value;
       if (!serverId) {
-        alert('请先选择或添加一个目标远程服务器！');
+        alert(window.t('newTask.noServer'));
         return;
       }
       payload.server_id = serverId;
@@ -308,7 +351,7 @@ class App {
       this.renderSidebarTasks();
       this.selectTask(newSession.session_id);
     } else {
-      alert('创建失败: ' + (res.error || '无法连接服务器'));
+      alert(window.t('newTask.createFailed') + ((res && res.error) || window.t('files.failed')));
     }
   }
 
@@ -328,8 +371,23 @@ class App {
       } catch (e) {}
     };
 
+    ws.onopen = () => {
+      this.agentRetryDelay[sessionId] = 1000; // reset backoff on success
+    };
+
     ws.onclose = () => {
-      delete this.agentSockets[sessionId];
+      if (this.agentSockets[sessionId] === ws) {
+        delete this.agentSockets[sessionId];
+      }
+      if (ws._intentionalClose) return;
+      // Auto-reconnect with exponential backoff while the session still exists.
+      const delay = this.agentRetryDelay[sessionId] || 1000;
+      this.agentRetryDelay[sessionId] = Math.min(delay * 2, 30000);
+      setTimeout(() => {
+        if (!ws._intentionalClose && this.sessions.some(s => s.session_id === sessionId)) {
+          this.connectAgentSocket(sessionId);
+        }
+      }, delay);
     };
 
     this.agentSockets[sessionId] = ws;
@@ -390,7 +448,7 @@ class App {
     } else if (type === 'status_change') {
       this.appendStatusNotice(data.message, data.status);
     } else if (type === 'error') {
-      this.appendStatusNotice('错误: ' + data.message, 'error');
+      this.appendStatusNotice(window.t('agent.error') + data.message, 'error');
     }
   }
 
@@ -407,7 +465,8 @@ class App {
     const container = document.getElementById('agent-messages');
     const card = document.createElement('div');
     card.className = 'agent-thought-card';
-    card.innerHTML = `<div style="font-weight: 600; font-size: 11px; color: var(--warning); margin-bottom: 4px;">🤔 Agent 思考决策 (Step ${step || 1})</div><div>${this.escapeHtml(text)}</div>`;
+    const label = this.escapeHtml(window.t('agent.thought', { step: step || 1 }));
+    card.innerHTML = `<div style="font-weight: 600; font-size: 11px; color: var(--warning); margin-bottom: 4px;">${label}</div><div>${this.escapeHtml(text)}</div>`;
     container.appendChild(card);
     container.scrollTop = container.scrollHeight;
   }
@@ -429,12 +488,12 @@ class App {
 
     card.innerHTML = `
       <div class="agent-tool-header">
-        <span>⚡ 正在调用工具: <strong>${toolName}</strong></span>
-        <span style="font-size: 11px; color: var(--warning);">执行中...</span>
+        <span>${this.escapeHtml(window.t('agent.toolCalling'))} <strong>${this.escapeHtml(toolName)}</strong></span>
+        <span style="font-size: 11px; color: var(--warning);">${this.escapeHtml(window.t('agent.running'))}</span>
       </div>
       <div class="agent-tool-body">
         <div style="color: var(--info);">${this.escapeHtml(argPreview)}</div>
-        <div class="tool-out" style="margin-top: 6px; color: var(--text-muted); font-size: 11px;">等待远程返回输出...</div>
+        <div class="tool-out" style="margin-top: 6px; color: var(--text-muted); font-size: 11px;">${this.escapeHtml(window.t('agent.waiting'))}</div>
       </div>
     `;
     container.appendChild(card);
@@ -446,12 +505,12 @@ class App {
     if (card) {
       const headerStatus = card.querySelector('.agent-tool-header span:last-child');
       if (headerStatus) {
-        headerStatus.textContent = '完成';
+        headerStatus.textContent = window.t('agent.done');
         headerStatus.style.color = 'var(--success)';
       }
       const outDiv = card.querySelector('.tool-out');
       if (outDiv) {
-        outDiv.textContent = result || '(无输出)';
+        outDiv.textContent = result || window.t('agent.noOutput');
         outDiv.style.color = '#cbd5e1';
       }
     }
@@ -467,8 +526,13 @@ class App {
   }
 
   escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   /* ---------------- Terminal Controls ---------------- */
@@ -489,7 +553,7 @@ class App {
   }
 
   checkGPU() {
-    this.fillPrompt('查看当前服务器显卡 GPU 显存与 CPU 内存占用');
+    this.fillPrompt(window.t('agent.chipGpu.prompt'));
     this.sendAgentPrompt();
   }
 
@@ -526,7 +590,7 @@ class App {
       if (this.currentRemotePath !== '/' && this.currentRemotePath !== '') {
         const upItem = document.createElement('div');
         upItem.className = 'file-item';
-        upItem.innerHTML = '<div>📁 .. (返回上一层)</div>';
+        upItem.textContent = window.t('files.up');
         upItem.onclick = () => {
           const parts = this.currentRemotePath.replace(/\/$/, '').split('/');
           parts.pop();
@@ -547,9 +611,9 @@ class App {
         item.innerHTML = `
           <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
             <span>${icon}</span>
-            <span>${f.name}</span>
+            <span>${this.escapeHtml(f.name)}</span>
           </div>
-          <span style="font-size: 11px; color: var(--text-muted);">${sizeStr}</span>
+          <span style="font-size: 11px; color: var(--text-muted);">${this.escapeHtml(sizeStr)}</span>
         `;
 
         if (f.is_dir) {
@@ -564,7 +628,8 @@ class App {
         list.appendChild(item);
       });
     } else {
-      list.innerHTML = `<div style="color: var(--danger); padding: 12px; font-size: 12px;">无法读取目录: ${res.error || '失败'}</div>`;
+      const errMsg = this.escapeHtml((res && res.error) || window.t('files.failed'));
+      list.innerHTML = `<div style="color: var(--danger); padding: 12px; font-size: 12px;">${this.escapeHtml(window.t('files.readError'))}${errMsg}</div>`;
     }
   }
 
@@ -575,10 +640,10 @@ class App {
     });
     if (res && res.success) {
       document.getElementById('preview-filename').textContent = `📄 ${name} (${path})`;
-      document.getElementById('preview-content').textContent = res.content || '(空文件)';
+      document.getElementById('preview-content').textContent = res.content || window.t('preview.emptyFile');
       this.openModal('modal-preview');
     } else {
-      alert('读取失败: ' + (res.error || '未知错误'));
+      alert(window.t('preview.readFailed') + ((res && res.error) || window.t('files.failed')));
     }
   }
 
@@ -601,28 +666,43 @@ class App {
     const container = document.getElementById('servers-list');
     container.innerHTML = '';
     if (this.servers.length === 0) {
-      container.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">尚未配置任何服务器。</div>';
+      const none = document.createElement('div');
+      none.style.cssText = 'color: var(--text-muted); font-size: 12px;';
+      none.textContent = window.t('servers.noneConfigured');
+      container.appendChild(none);
       return;
     }
     this.servers.forEach(s => {
       const item = document.createElement('div');
       item.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 8px; font-size: 13px;';
+      const authLabel = s.auth_type === 'key' ? window.t('servers.authKeyShort') : window.t('servers.authPasswordShort');
       item.innerHTML = `
         <div>
-          <strong style="color: #fff;">${s.name}</strong>
-          <div style="font-size: 12px; color: var(--text-muted);">${s.username}@${s.host}:${s.port} (${s.auth_type === 'key' ? 'SSH私钥' : '密码认证'})</div>
+          <strong style="color: #fff;">${this.escapeHtml(s.name)}</strong>
+          <div style="font-size: 12px; color: var(--text-muted);">${this.escapeHtml(s.username)}@${this.escapeHtml(s.host)}:${this.escapeHtml(s.port)} (${authLabel})</div>
         </div>
-        <div style="display: flex; gap: 6px;">
-          <button class="btn btn-secondary btn-sm" onclick="app.editServer('${s.id}')">编辑</button>
-          <button class="btn btn-secondary btn-sm" style="color: var(--danger);" onclick="app.deleteServer('${s.id}')">删除</button>
-        </div>
+        <div style="display: flex; gap: 6px;"></div>
       `;
+      // Build buttons with listeners (no inline onclick string interpolation,
+      // which would allow JS injection if an id ever contained a quote).
+      const btnWrap = item.lastElementChild;
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-secondary btn-sm';
+      editBtn.textContent = window.t('common.edit');
+      editBtn.onclick = () => this.editServer(s.id);
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-secondary btn-sm';
+      delBtn.style.color = 'var(--danger)';
+      delBtn.textContent = window.t('common.delete');
+      delBtn.onclick = () => this.deleteServer(s.id);
+      btnWrap.appendChild(editBtn);
+      btnWrap.appendChild(delBtn);
       container.appendChild(item);
     });
   }
 
   showAddServerForm() {
-    document.getElementById('server-form-title').textContent = '添加新服务器';
+    document.getElementById('server-form-title').textContent = window.t('servers.formTitleAdd');
     document.getElementById('srv-id').value = '';
     document.getElementById('srv-name').value = '';
     document.getElementById('srv-host').value = '';
@@ -639,7 +719,7 @@ class App {
   editServer(id) {
     const s = this.servers.find(x => x.id === id);
     if (!s) return;
-    document.getElementById('server-form-title').textContent = '编辑服务器';
+    document.getElementById('server-form-title').textContent = window.t('servers.formTitleEdit');
     document.getElementById('srv-id').value = s.id;
     document.getElementById('srv-name').value = s.name;
     document.getElementById('srv-host').value = s.host;
@@ -668,7 +748,7 @@ class App {
     const name = document.getElementById('srv-name').value.trim();
     const host = document.getElementById('srv-host').value.trim();
     if (!name || !host) {
-      alert('请填写名称与主机地址');
+      alert(window.t('servers.needNameHost'));
       return;
     }
 
@@ -697,7 +777,7 @@ class App {
   }
 
   async deleteServer(id) {
-    if (!confirm('确定删除该服务器配置？')) return;
+    if (!confirm(window.t('confirm.deleteServer'))) return;
     const res = await this.fetchJson('/api/config/server', {
       method: 'DELETE',
       body: JSON.stringify({ id })
@@ -726,7 +806,7 @@ class App {
     });
 
     if (res && res.success) {
-      alert(`已向 ${res.broadcasted_to} 个活跃任务广播指令！`);
+      alert(window.t('broadcast.done', { n: res.broadcasted_to }));
     }
   }
 
@@ -747,12 +827,21 @@ class App {
   startStatusPolling() {
     const poll = async () => {
       const data = await this.fetchJson('/api/status');
-      if (data && data.success) {
-        document.getElementById('stat-mem').textContent = `${data.memory_mb} MB`;
+      const el = document.getElementById('stat-mem');
+      if (data && data.success && el) {
+        el.textContent = `${data.memory_mb} MB`;
       }
     };
     poll();
-    setInterval(poll, 3000);
+    if (this._pollTimer) clearInterval(this._pollTimer);
+    this._pollTimer = setInterval(poll, 3000);
+  }
+
+  stopStatusPolling() {
+    if (this._pollTimer) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
   }
 }
 

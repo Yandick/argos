@@ -15,9 +15,29 @@ BASE_URL = f"http://127.0.0.1:{DAEMON_PORT}"
 def is_daemon_running():
     try:
         r = requests.get(f"{BASE_URL}/api/status", timeout=1.0)
-        return r.status_code == 200
+        if r.status_code != 200:
+            return False
+        # Verify it's actually our daemon, not some other service that happens
+        # to occupy port 8765 (e.g. Jupyter). Otherwise every API call would be
+        # silently routed to the wrong process.
+        data = r.json()
+        return data.get("server") == "argos"
     except Exception:
         return False
+
+
+def _find_app_script():
+    """Locate app.py across install layouts (source tree, editable, cwd)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(os.path.dirname(os.path.dirname(here)), "app.py"),  # src/server_helper -> repo root
+        os.path.join(os.path.dirname(here), "app.py"),
+        os.path.join(os.getcwd(), "app.py"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return candidates[0]
 
 
 def ensure_daemon_running():
@@ -31,8 +51,11 @@ def ensure_daemon_running():
         if os.path.isfile(pythonw):
             python_exe = pythonw
 
-    # Run app.py or server_helper in background detached process
-    script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "app.py")
+    # Run app.py in a background detached process
+    script_path = _find_app_script()
+    if not os.path.isfile(script_path):
+        print(f"[Daemon] 找不到后台服务脚本 app.py（尝试路径: {script_path}）")
+        return False
 
     creationflags = 0
     if sys.platform == "win32":

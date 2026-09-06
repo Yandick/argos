@@ -4,6 +4,7 @@ Provides interactive PTY channels with TCP_NODELAY and non-blocking streaming.
 """
 import os
 import time
+import shlex
 import socket
 import paramiko
 
@@ -30,6 +31,13 @@ class SSHClientWrapper:
 
     def connect(self, cols=120, rows=30):
         self.client = paramiko.SSHClient()
+        # Load known_hosts first so a *changed* host key is rejected (MITM
+        # protection); only genuinely unknown hosts get auto-added.
+        try:
+            self.client.load_system_host_keys()
+            self.client.load_host_keys(os.path.expanduser("~/.ssh/known_hosts"))
+        except Exception:
+            pass
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         use_pass = (self.auth_type == "password" or bool(self.password))
@@ -103,7 +111,7 @@ class SSHClientWrapper:
     def exec_command(self, cmd, cwd=None, timeout=30):
         if not self.client:
             return -1, "", "SSH Client Not Connected"
-        full_cmd = f"cd '{cwd}' 2>/dev/null; {cmd}" if cwd else cmd
+        full_cmd = f"cd {shlex.quote(cwd)} 2>/dev/null; {cmd}" if cwd else cmd
         stdin, stdout, stderr = self.client.exec_command(full_cmd, timeout=timeout)
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")

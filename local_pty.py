@@ -3,10 +3,15 @@ Local PTY Manager
 Handles local interactive agent processes (e.g. claude, agy, powershell, cmd) via pywinpty on Windows.
 """
 import os
+import sys
 import time
 import shutil
 import threading
-from winpty import PtyProcess
+
+try:
+    from winpty import PtyProcess
+except ImportError:  # non-Windows platform or pywinpty not installed
+    PtyProcess = None
 
 
 class LocalPtySession:
@@ -27,6 +32,10 @@ class LocalPtySession:
         self._stop_event = threading.Event()
 
     def start(self, cols=120, rows=30):
+        if PtyProcess is None:
+            err = "本地 PTY 需要 pywinpty（仅支持 Windows）。请在 Windows 上运行，或改用远程 SSH 会话。"
+            self._emit(f"\r\n\x1b[31m[Local Agent 错误]\x1b[0m {err}\r\n")
+            return False, err
         try:
             self._emit(f"\x1b[36m[Local Agent]\x1b[0m 正在启动本地进程: {self.cmd} ...\r\n")
 
@@ -54,8 +63,8 @@ class LocalPtySession:
         cmd = cmd.strip()
         # If user directly asked for claude
         if cmd == "claude" or cmd.startswith("claude "):
-            claude_cmd = shutil.which("claude.cmd") or shutil.which("claude.exe") or r"D:\nodejs\node_global\claude.cmd"
-            if os.path.exists(claude_cmd):
+            claude_cmd = shutil.which("claude.cmd") or shutil.which("claude.exe") or shutil.which("claude")
+            if claude_cmd and os.path.exists(claude_cmd):
                 # Run via cmd.exe /c to keep standard stdio wrapping or powershell
                 return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{claude_cmd}\' {cmd[6:]}"'
             return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'

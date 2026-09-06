@@ -5,13 +5,28 @@ Handles persistent storage of SSH servers, task presets, and application setting
 import os
 import json
 import uuid
+import tempfile
+import threading
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 
+
+def _deep_merge_defaults(data, defaults):
+    """Recursively fill missing keys from defaults into data (in place)."""
+    if not isinstance(data, dict) or not isinstance(defaults, dict):
+        return data
+    for k, v in defaults.items():
+        if k not in data:
+            data[k] = v
+        elif isinstance(v, dict) and isinstance(data[k], dict):
+            _deep_merge_defaults(data[k], v)
+    return data
+
 DEFAULT_CONFIG = {
     "settings": {
         "port": 8765,
+        "language": "en",
         "default_agent_cli": "claude",
         "api_key": "",
         "api_base": "https://api.deepseek.com/v1",
@@ -28,6 +43,7 @@ DEFAULT_CONFIG = {
 class ConfigManager:
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
+        self._save_lock = threading.Lock()
         self.config = self._load()
 
     def _load(self):
@@ -37,9 +53,7 @@ class ConfigManager:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                for k, v in DEFAULT_CONFIG.items():
-                    if k not in data:
-                        data[k] = v
+                _deep_merge_defaults(data, DEFAULT_CONFIG)
                 # Clean up legacy sample servers/presets if present
                 if "servers" in data:
                     data["servers"] = [s for s in data["servers"] if s.get("id") != "sample-server"]
@@ -53,11 +67,24 @@ class ConfigManager:
     def _save(self, data=None):
         if data is None:
             data = self.config
-        try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"[ConfigManager] Failed to save config: {e}")
+        with self._save_lock:
+            try:
+                # Atomic write: dump to a temp file in the same dir, then replace.
+                fd, tmp_path = tempfile.mkstemp(dir=DATA_DIR, prefix=".config.", suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp_path, CONFIG_FILE)
+                except Exception:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+            except Exception as e:
+                print(f"[ConfigManager] Failed to save config: {e}")
 
     def get_all(self):
         return self.config

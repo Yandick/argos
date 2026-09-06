@@ -48,6 +48,13 @@ class SSHSession:
         try:
             self._emit(f"\r\n\x1b[36m[SSH]\x1b[0m 正在连接到 {self.username}@{self.host}:{self.port} ...\r\n")
             self.client = paramiko.SSHClient()
+            # Load existing known_hosts so a *changed* host key is rejected (MITM
+            # protection); only genuinely unknown hosts are auto-added below.
+            try:
+                self.client.load_system_host_keys()
+                self.client.load_host_keys(os.path.expanduser("~/.ssh/known_hosts"))
+            except Exception:
+                pass
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
             connect_kwargs = {
@@ -280,6 +287,34 @@ class SSHSession:
                 return content.decode("utf-8", errors="replace"), None
         except Exception as e:
             return None, str(e)
+
+    def write_sftp_file(self, remote_file_path, content):
+        """Write text content to a remote file via the cached SFTP client.
+
+        Reuses a single SFTP channel instead of opening a new one per call,
+        which avoids leaking channels across many agent tool invocations.
+        Returns (True, None) on success or (False, error_message) on failure.
+        """
+        if not self.client:
+            return False, "Not connected"
+        try:
+            if not self.sftp:
+                self.sftp = self.client.open_sftp()
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            with self.sftp.open(remote_file_path, "wb") as f:
+                f.write(content)
+            return True, None
+        except Exception as e:
+            # A broken channel shouldn't poison future calls; drop it so the
+            # next operation reopens a fresh one.
+            try:
+                if self.sftp:
+                    self.sftp.close()
+            except Exception:
+                pass
+            self.sftp = None
+            return False, str(e)
 
     def close(self):
         self._stop_event.set()

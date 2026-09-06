@@ -54,27 +54,87 @@ def attach_terminal(session_id, task_name, agent_type="claude", remote_dir=None)
     t = threading.Thread(target=reader_loop, daemon=True)
     t.start()
 
-    # Read keystrokes from stdin
+    # Read keystrokes from stdin (platform-specific raw input)
     try:
-        import msvcrt
-        while not stop_event.is_set():
-            if msvcrt.kbhit():
-                ch = msvcrt.getch()
-                # Check for Ctrl+] (ASCII 29 / 0x1d)
-                if ch == b'\x1d':
-                    console.print("\n[bold yellow][ServerHelper] 已脱离会话，任务仍在后台持续运行。[/bold yellow]")
-                    break
-                try:
-                    ws.send(ch.decode("latin1"))
-                except Exception:
-                    break
-            else:
-                time.sleep(0.01)
+        if sys.platform == "win32":
+            _read_keys_windows(ws, stop_event)
+        else:
+            _read_keys_posix(ws, stop_event)
     except Exception as e:
         console.print(f"\n[red]输入流异常: {e}[/red]")
     finally:
         stop_event.set()
         try:
             ws.close()
+        except Exception:
+            pass
+
+
+# Windows special-key (0x00 / 0xe0 prefix) second byte -> ANSI escape sequence
+_WIN_ARROW_MAP = {
+    "H": "\x1b[A",  # Up
+    "P": "\x1b[B",  # Down
+    "M": "\x1b[C",  # Right
+    "K": "\x1b[D",  # Left
+    "G": "\x1b[H",  # Home
+    "O": "\x1b[F",  # End
+    "S": "\x1b[3~",  # Delete
+    "I": "\x1b[5~",  # PgUp
+    "Q": "\x1b[6~",  # PgDn
+}
+
+
+def _read_keys_windows(ws, stop_event):
+    import msvcrt
+    while not stop_event.is_set():
+        if msvcrt.kbhit():
+            # getwch returns a Unicode str (correct for non-ASCII / IME input)
+            ch = msvcrt.getwch()
+            if ch == "\x1d":  # Ctrl+]
+                console.print("\n[bold yellow][ServerHelper] 已脱离会话，任务仍在后台持续运行。[/bold yellow]")
+                break
+            if ch in ("\x00", "\xe0"):  # special / arrow key prefix
+                ch2 = msvcrt.getwch() if msvcrt.kbhit() else ""
+                seq = _WIN_ARROW_MAP.get(ch2)
+                if seq is None:
+                    continue  # ignore unmapped function keys
+                try:
+                    ws.send(seq)
+                except Exception:
+                    break
+            else:
+                try:
+                    ws.send(ch)
+                except Exception:
+                    break
+        else:
+            time.sleep(0.01)
+
+
+def _read_keys_posix(ws, stop_event):
+    import select
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        while not stop_event.is_set():
+            r, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if not r:
+                continue
+            ch = sys.stdin.read(1)
+            if not ch:
+                break
+            if ch == "\x1d":  # Ctrl+]
+                console.print("\n[bold yellow][ServerHelper] 已脱离会话，任务仍在后台持续运行。[/bold yellow]")
+                break
+            try:
+                ws.send(ch)
+            except Exception:
+                break
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
         except Exception:
             pass

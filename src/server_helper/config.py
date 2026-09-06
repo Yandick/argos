@@ -5,6 +5,20 @@ Loads settings from setting.json (current dir or ~/.server-helper/setting.json)
 import os
 import json
 import uuid
+import tempfile
+
+
+def _deep_merge_defaults(data, defaults):
+    """Recursively fill missing keys from defaults into data (in place)."""
+    if not isinstance(data, dict) or not isinstance(defaults, dict):
+        return data
+    for k, v in defaults.items():
+        if k not in data:
+            data[k] = v
+        elif isinstance(v, dict) and isinstance(data[k], dict):
+            _deep_merge_defaults(data[k], v)
+    return data
+
 
 DEFAULT_CONFIG = {
     "servers": [],
@@ -32,6 +46,7 @@ DEFAULT_CONFIG = {
         }
     },
     "settings": {
+        "language": "en",
         "theme": "catppuccin",
         "default_agent": "agy",
         "default_model": "gemini-3.8-flash",
@@ -61,21 +76,21 @@ class Config:
         proj_file = os.path.join(proj_root, "setting.json")
         if os.path.isfile(proj_file):
             return proj_file
-        # Fallback to home dir
-        home_dir = os.path.expanduser(os.environ.get("SERVER_HELPER_HOME", "~/.server-helper"))
+        # Fallback to home dir (resolve to an absolute path so a relative
+        # SERVER_HELPER_HOME doesn't silently write into the CWD)
+        home_dir = os.path.abspath(os.path.expanduser(os.environ.get("SERVER_HELPER_HOME", "~/.server-helper")))
         os.makedirs(home_dir, exist_ok=True)
         return os.path.join(home_dir, "setting.json")
 
     def _load(self):
         if not os.path.exists(self.config_path):
-            self._save(DEFAULT_CONFIG)
-            return DEFAULT_CONFIG
+            data = json.loads(json.dumps(DEFAULT_CONFIG))
+            self._save(data)
+            return data
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                for k, v in DEFAULT_CONFIG.items():
-                    if k not in data:
-                        data[k] = v
+                _deep_merge_defaults(data, DEFAULT_CONFIG)
 
                 # Auto-migrate outdated model defaults
                 settings = data.setdefault("settings", {})
@@ -87,21 +102,47 @@ class Config:
                         agents["agy"]["model"] = "gemini-3.8-flash"
 
                 return data
+        except Exception as e:
+            # Don't silently discard a user's config; back up the corrupt file
+            # and tell them what happened before falling back to defaults.
+            print(f"[Config] 配置文件解析失败 ({self.config_path}): {e}")
+            try:
+                backup = self.config_path + ".corrupt.bak"
+                if not os.path.exists(backup):
+                    os.replace(self.config_path, backup)
+                    print(f"[Config] 已将损坏的配置备份到: {backup}")
+            except Exception:
+                pass
+            return json.loads(json.dumps(DEFAULT_CONFIG))
+
+    @staticmethod
+    def _atomic_write_json(path, data):
+        """Write JSON atomically: temp file in same dir, fsync, then os.replace."""
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".setting.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
         except Exception:
-            return DEFAULT_CONFIG
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _save(self, data=None):
         if data is None:
             data = self.data
         try:
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            self._atomic_write_json(self.config_path, data)
             # Also keep global home setting.json in sync
             home_path = os.path.expanduser("~/.server-helper/setting.json")
             if os.path.abspath(self.config_path) != os.path.abspath(home_path):
-                os.makedirs(os.path.dirname(home_path), exist_ok=True)
-                with open(home_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
+                self._atomic_write_json(home_path, data)
         except Exception as e:
             print(f"[Config] 保存配置失败: {e}")
 
@@ -190,14 +231,8 @@ class Config:
         if not target:
             return False, f"未找到服务器: {old_name_or_id}"
         target["name"] = new_name
+        # _save() already mirrors to the global home setting.json atomically.
         self._save()
-        try:
-            g_path = os.path.expanduser("~/.server-helper/setting.json")
-            if os.path.isfile(g_path):
-                with open(g_path, "w", encoding="utf-8") as f:
-                    json.dump(self.data, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
         return True, new_name
 
     def get_agents(self):
@@ -211,15 +246,9 @@ class Config:
         return self.data.get("settings", {})
 
     def update_settings(self, new_settings):
-        self.data["settings"].update(new_settings)
+        self.data.setdefault("settings", {}).update(new_settings)
+        # _save() already mirrors to the global home setting.json atomically.
         self._save()
-        try:
-            g_path = os.path.expanduser("~/.server-helper/setting.json")
-            if os.path.isfile(g_path):
-                with open(g_path, "w", encoding="utf-8") as f:
-                    json.dump(self.data, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
         return self.data["settings"]
 
     def get_model(self, agent_name=None):

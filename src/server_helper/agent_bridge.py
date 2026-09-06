@@ -7,6 +7,8 @@ import os
 import sys
 import json
 import time
+import base64
+import shlex
 import requests
 from rich.console import Console
 from rich.panel import Panel
@@ -31,19 +33,30 @@ def build_agent_cmd(agent_type, server=None, remote_dir=None):
         user = server.get("user", "root")
         key_path = server.get("key_path")
 
-        key_flag = f"-i '{key_path}'" if key_path and os.path.isfile(os.path.expanduser(key_path)) else ""
-        port_flag = f"-p {port}" if port != 22 else ""
+        parts = ["ssh"]
+        if key_path and os.path.isfile(os.path.expanduser(key_path)):
+            parts += ["-i", shlex.quote(os.path.expanduser(key_path))]
+        try:
+            port_num = int(port)
+        except (TypeError, ValueError):
+            port_num = 22
+        if port_num != 22:
+            parts += ["-p", str(port_num)]
 
-        if agent == "claude":
-            remote_cmd = f"cd '{rdir}' && claude"
-        elif agent == "agy":
-            remote_cmd = f"cd '{rdir}' && agy"
-        elif agent == "codex":
-            remote_cmd = f"cd '{rdir}' && codex"
+        agent_bin = {
+            "claude": "claude",
+            "agy": "agy",
+            "codex": "codex",
+        }.get(agent)
+        # Command executed by the remote shell; rdir is quoted for the remote side.
+        if agent_bin:
+            remote_cmd = f"cd {shlex.quote(rdir)} && {agent_bin}"
         else:
-            remote_cmd = f"cd '{rdir}' && (bash -l || sh)"
+            remote_cmd = f"cd {shlex.quote(rdir)} && (bash -l || sh)"
 
-        return f"ssh {key_flag} {port_flag} -t {user}@{host} \"{remote_cmd}\""
+        # Quote host/user and the whole remote command for the local shell.
+        parts += ["-t", shlex.quote(f"{user}@{host}"), shlex.quote(remote_cmd)]
+        return " ".join(parts)
 
     else:
         # Local execution
@@ -177,15 +190,32 @@ def run_cli_agent_task(ssh_client, remote_dir, prompt, config, console=None):
                         tool_output = out if out else err
                     elif fn_name == "read_file":
                         p = fn_args.get("path", "")
-                        _, out, err = ssh_client.exec_command(f"cat '{p}'", cwd=remote_dir)
+                        _, out, err = ssh_client.exec_command(f"cat {shlex.quote(p)}", cwd=remote_dir)
                         tool_output = out if out else err
                     elif fn_name == "edit_file":
                         p = fn_args.get("path", "")
                         old_s = fn_args.get("old_str", "")
                         new_s = fn_args.get("new_str", "")
-                        # Run python inline on remote to do exact replacement
-                        py_script = f"with open('{p}', 'r', encoding='utf-8') as f: c = f.read()\nassert '{old_s}' in c\nwith open('{p}', 'w', encoding='utf-8') as f: f.write(c.replace('{old_s}', '{new_s}', 1))"
-                        _, out, err = ssh_client.exec_command(f"python3 -c \"{py_script}\"", cwd=remote_dir)
+                        # Pass the parameters as base64-encoded JSON and run a
+                        # fixed Python program on the remote. This avoids any
+                        # shell/Python string interpolation of untrusted content
+                        # (paths, quotes, newlines) that would allow injection.
+                        payload = json.dumps({"path": p, "old": old_s, "new": new_s})
+                        payload_b64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+                        remote_py = (
+                            "import base64,json,io,sys\n"
+                            f"d=json.loads(base64.b64decode('{payload_b64}').decode('utf-8'))\n"
+                            "p,o,n=d['path'],d['old'],d['new']\n"
+                            "with io.open(p,'r',encoding='utf-8') as f: c=f.read()\n"
+                            "if o not in c:\n"
+                            "    sys.stderr.write('old_str not found\\n'); sys.exit(2)\n"
+                            "c=c.replace(o,n,1)\n"
+                            "with io.open(p,'w',encoding='utf-8') as f: f.write(c)\n"
+                            "print('OK')\n"
+                        )
+                        script_b64 = base64.b64encode(remote_py.encode("utf-8")).decode("ascii")
+                        run = f"python3 -c \"import base64;exec(base64.b64decode('{script_b64}').decode('utf-8'))\""
+                        _, out, err = ssh_client.exec_command(run, cwd=remote_dir)
                         tool_output = "修改成功" if not err else f"修改失败: {err}"
 
                     console.print(Panel(tool_output[:400] + ("..." if len(tool_output) > 400 else ""), title="工具返回结果", border_style="dim"))

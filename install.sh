@@ -87,9 +87,12 @@ case "$CURRENT_SHELL" in
     *)    SHELL_RC="$HOME/.profile" ;;
 esac
 
+EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]] && [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
-    if [ -f "$SHELL_RC" ]; then
-        echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$SHELL_RC"
+    # Only append if not already present, so repeated installs don't pile up
+    # duplicate export lines in the user's shell rc.
+    if [ -f "$SHELL_RC" ] && ! grep -qF "$BIN_DIR" "$SHELL_RC"; then
+        echo "$EXPORT_LINE" >> "$SHELL_RC"
         echo -e "${YELLOW}[提示] 已将 $BIN_DIR 添加至 $SHELL_RC${RESET}"
     fi
 fi

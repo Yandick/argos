@@ -3,6 +3,7 @@ Session & Task Manager for ServerHelper
 Maintains active tasks in memory with output buffering and multi-task switching.
 """
 import time
+import shlex
 import threading
 from server_helper.ssh import SSHClientWrapper
 from server_helper.local_pty import LocalPty
@@ -48,7 +49,7 @@ class TaskSession:
 
                 # Initial directory cd & agent launch
                 if self.remote_dir:
-                    backend.write(f"cd '{self.remote_dir}' 2>/dev/null || cd {self.remote_dir}\n")
+                    backend.write(f"cd {shlex.quote(self.remote_dir)} 2>/dev/null\n")
                     time.sleep(0.1)
 
                 if self.startup_cmd:
@@ -74,12 +75,14 @@ class TaskSession:
             return False, str(e)
 
     def write(self, data):
-        if self.backend:
-            self.backend.write(data)
+        backend = self.backend
+        if backend:
+            backend.write(data)
 
     def resize(self, cols, rows):
-        if self.backend:
-            self.backend.resize(cols, rows)
+        backend = self.backend
+        if backend:
+            backend.resize(cols, rows)
 
     def _reader(self):
         while not self._stop_event.is_set() and self.backend and self.status == "running":
@@ -106,9 +109,12 @@ class TaskSession:
     def close(self):
         self._stop_event.set()
         self.status = "stopped"
-        if self.backend:
-            self.backend.close()
-            self.backend = None
+        # Grab a local reference and clear the attribute first so the reader
+        # thread can't call read() on a backend that's being torn down.
+        backend = self.backend
+        self.backend = None
+        if backend:
+            backend.close()
 
 
 class SessionManager:

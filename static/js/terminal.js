@@ -55,53 +55,64 @@ class TerminalManager {
       } catch (e) {}
     }, 100);
 
-    // Setup WebSocket
+    // Setup WebSocket with auto-reconnect
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/terminal/${sessionId}`;
-    const ws = new WebSocket(wsUrl);
 
-    ws.onopen = () => {
-      // Send initial dimensions
-      setTimeout(() => {
-        try {
-          fitAddon.fit();
-          ws.send(JSON.stringify({
-            type: 'resize',
-            cols: term.cols,
-            rows: term.rows
-          }));
-        } catch (e) {}
-      }, 150);
+    const instance = {
+      term, fitAddon, ws: null, container: containerEl,
+      retryDelay: 1000, intentionalClose: false
     };
+    this.instances[sessionId] = instance;
 
-    ws.onmessage = (event) => {
-      term.write(event.data);
+    const connect = () => {
+      if (instance.intentionalClose) return;
+      const ws = new WebSocket(wsUrl);
+      instance.ws = ws;
+
+      ws.onopen = () => {
+        instance.retryDelay = 1000; // reset backoff
+        // Send initial dimensions
+        setTimeout(() => {
+          try {
+            fitAddon.fit();
+            ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+          } catch (e) {}
+        }, 150);
+      };
+
+      ws.onmessage = (event) => {
+        term.write(event.data);
+      };
+
+      ws.onerror = () => {
+        term.write('\r\n\x1b[31m' + window.t('terminal.wsError') + '\x1b[0m\r\n');
+      };
+
+      ws.onclose = () => {
+        if (instance.intentionalClose) return;
+        term.write('\r\n\x1b[33m' + window.t('terminal.reconnecting') + '\x1b[0m\r\n');
+        const delay = instance.retryDelay;
+        instance.retryDelay = Math.min(delay * 2, 30000);
+        setTimeout(connect, delay);
+      };
     };
+    connect();
 
-    ws.onerror = (err) => {
-      term.write('\r\n\x1b[31m[WebSocket 错误] 无法连接到终端服务。\x1b[0m\r\n');
-    };
-
-    ws.onclose = () => {
-      term.write('\r\n\x1b[33m[终端连接已关闭]\x1b[0m\r\n');
-    };
-
-    // User keystrokes
+    // User keystrokes (always target the current socket)
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
+      if (instance.ws && instance.ws.readyState === WebSocket.OPEN) {
+        instance.ws.send(data);
       }
     });
 
     // Terminal resize event
     term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      if (instance.ws && instance.ws.readyState === WebSocket.OPEN) {
+        instance.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       }
     });
 
-    const instance = { term, fitAddon, ws, container: containerEl };
-    this.instances[sessionId] = instance;
     return instance;
   }
 
@@ -110,7 +121,7 @@ class TerminalManager {
     if (inst && inst.fitAddon && inst.container.offsetParent !== null) {
       try {
         inst.fitAddon.fit();
-        if (inst.ws.readyState === WebSocket.OPEN) {
+        if (inst.ws && inst.ws.readyState === WebSocket.OPEN) {
           inst.ws.send(JSON.stringify({
             type: 'resize',
             cols: inst.term.cols,
@@ -144,8 +155,9 @@ class TerminalManager {
   dispose(sessionId) {
     const inst = this.instances[sessionId];
     if (inst) {
+      inst.intentionalClose = true; // prevent auto-reconnect
       try {
-        inst.ws.close();
+        if (inst.ws) inst.ws.close();
       } catch (e) {}
       try {
         inst.term.dispose();

@@ -7,6 +7,7 @@ import os
 import json
 import time
 import uuid
+import shlex
 import threading
 import traceback
 import requests
@@ -210,6 +211,19 @@ class AgentEngine:
             return True
         return False
 
+    def stop_tasks_for_session(self, session_id):
+        """Stop every still-running task belonging to a session.
+
+        Used by the UI stop button, which knows the session but not the
+        specific task_id. Returns the number of tasks stopped.
+        """
+        with self._lock:
+            tasks = [t for t in self.active_tasks.values()
+                     if t.session_id == session_id and t.status in ("idle", "running")]
+        for t in tasks:
+            self.stop_task(t.task_id)
+        return len(tasks)
+
     def get_task_history(self, task_id):
         with self._lock:
             task = self.active_tasks.get(task_id)
@@ -248,7 +262,8 @@ class AgentEngine:
                 return "错误: 命令不能为空"
 
             if session.session_type == "remote_ssh" and client:
-                full_cmd = f"cd '{remote_dir}' 2>/dev/null || cd {remote_dir}; {cmd}"
+                quoted_dir = shlex.quote(remote_dir)
+                full_cmd = f"cd {quoted_dir} 2>/dev/null; {cmd}"
                 try:
                     stdin, stdout, stderr = client.exec_command(full_cmd, timeout=timeout)
                     out = stdout.read().decode("utf-8", errors="replace")
@@ -312,14 +327,11 @@ class AgentEngine:
             filepath = self._resolve_path(tool_args.get("path", ""), remote_dir)
             content = tool_args.get("content", "")
 
-            if session.session_type == "remote_ssh" and client:
-                try:
-                    sftp = client.open_sftp()
-                    with sftp.open(filepath, "w") as f:
-                        f.write(content)
+            if session.session_type == "remote_ssh" and backend:
+                ok, err = backend.write_sftp_file(filepath, content)
+                if ok:
                     return f"成功写入文件: {filepath} ({len(content)} 字符)"
-                except Exception as e:
-                    return f"写入文件失败: {e}"
+                return f"写入文件失败: {err}"
             else:
                 try:
                     with open(filepath, "w", encoding="utf-8") as f:
@@ -340,13 +352,10 @@ class AgentEngine:
                 if old_str not in content:
                     return f"错误: 在文件 {filepath} 中未匹配到原文本内容"
                 new_content = content.replace(old_str, new_str, 1)
-                try:
-                    sftp = client.open_sftp()
-                    with sftp.open(filepath, "w") as f:
-                        f.write(new_content)
+                ok, err = backend.write_sftp_file(filepath, new_content)
+                if ok:
                     return f"成功修改文件 {filepath}！"
-                except Exception as e:
-                    return f"保存修改失败: {e}"
+                return f"保存修改失败: {err}"
             else:
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:

@@ -112,12 +112,15 @@ ServerHelper 优先读取工作目录下的 `./setting.json`，若未找到则�
     }
   },
   "settings": {
+    "language": "en",
     "theme": "dark",
     "auto_reconnect": true,
     "keepalive_interval": 15
   }
 }
 ```
+
+> **界面语言 / UI Language**：`settings.language` 支持 `"en"`（English，默认）与 `"zh"`（中文）。在交互式 CLI 中可直接用 `/lang en` 或 `/lang zh` 切换（不带参数则一键互换），Web 控制台左下角有 🌐 Language 切换按钮。该设置只影响界面文案，不会改变 Agent 的回复语言。
 
 ---
 
@@ -159,6 +162,7 @@ server-helper > /help
 | `/close [名称]` | | 停止当前或指定的任务 | `/close rec-task` |
 | `/servers` | | 查看或管理已保存的远程服务器配置 | `/servers` |
 | `/config` | | 查看或检查当前 `setting.json` 状态 | `/config` |
+| `/lang` | | 切换界面语言（`en` / `zh`，不带参数则一键互换） | `/lang zh` |
 | `/clear` | | 清除当前终端屏幕 | `/clear` |
 | `/exit` | `/quit` | 退出 CLI 交互界面（**后台任务不受影响，继续稳定运行**） | `/exit` |
 

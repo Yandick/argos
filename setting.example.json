@@ -1,34 +1,44 @@
 {
   "servers": [
     {
+      "id": "srv-example1",
       "name": "gpu-lab-1",
       "host": "192.168.1.100",
       "port": 22,
       "user": "ubuntu",
+      "username": "ubuntu",
       "auth": "password",
+      "auth_type": "password",
       "password": "your_ssh_password_here",
-      "default_dir": "/workspace/rec"
+      "default_dir": "/workspace/rec",
+      "remote_proxy_port": 10808
     },
     {
+      "id": "srv-example2",
       "name": "safety-cluster",
       "host": "10.0.0.12",
       "port": 22,
       "user": "root",
+      "username": "root",
       "auth": "key",
+      "auth_type": "key",
       "key_path": "~/.ssh/id_rsa",
       "default_dir": "/data/safety"
     }
   ],
   "agents": {
-    "default": "claude",
+    "default": "agy",
     "claude": {
       "name": "Claude Code",
       "cmd": "claude",
+      "model": "claude-3-7-sonnet",
       "type": "cli"
     },
     "agy": {
       "name": "Antigravity CLI",
       "cmd": "agy",
+      "model": "gemini-3.8-flash",
+      "thinking_effort": "high",
       "type": "cli"
     },
     "codex": {
@@ -40,7 +50,12 @@
     }
   },
   "settings": {
-    "theme": "dark",
+    "language": "zh",
+    "theme": "catppuccin",
+    "default_agent": "agy",
+    "default_model": "gemini-3.8-flash",
+    "thinking_effort": "high",
+    "proxy": "http://127.0.0.1:7897",
     "auto_reconnect": true,
     "keepalive_interval": 15
   }

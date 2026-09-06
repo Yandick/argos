@@ -289,7 +289,9 @@ def cmd_config(args):
         config.update_settings({"api_base": args.base})
         console.print(f"[bold green]API Base URL 已更新为: {args.base}[/bold green]")
     if args.model:
-        config.update_settings({"model": args.model})
+        # set_model writes settings.default_model (the key actually read back by
+        # get_model / agent_cli); the old code wrote a dead "model" key.
+        config.set_model(args.model)
         console.print(f"[bold green]Model 已更新为: {args.model}[/bold green]")
     if args.agent:
         config.update_settings({"default_agent": args.agent})
@@ -298,8 +300,8 @@ def cmd_config(args):
     s = config.get_settings()
     console.print(Panel(
         f"[bold cyan]默认 Agent:[/bold cyan] {s.get('default_agent', 'claude')}\n"
-        f"[bold cyan]API Base:[/bold cyan] {s.get('api_base')}\n"
-        f"[bold cyan]Model:[/bold cyan] {s.get('model')}\n"
+        f"[bold cyan]API Base:[/bold cyan] {s.get('api_base') or config.get_agents().get('codex', {}).get('api_base')}\n"
+        f"[bold cyan]Model:[/bold cyan] {config.get_model()}\n"
         f"[bold cyan]API Key:[/bold cyan] {'******' if s.get('api_key') else '[dim](未配置)[/dim]'}",
         title="⚙️ ServerHelper 配置信息",
         border_style="cyan"

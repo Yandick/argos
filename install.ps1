@@ -98,13 +98,17 @@ if ($pathParts -notcontains $binDir) {
     Write-Host "[Info] $binDir is already present in User PATH." -ForegroundColor Cyan
 }
 
-# Also copy into npm global bin directory if present for instant access without restarting terminal
-$npmGlobal = "D:\nodejs\node_global"
-if (Test-Path $npmGlobal) {
-    Copy-Item -Path (Join-Path $binDir "argos.cmd") -Destination (Join-Path $npmGlobal "argos.cmd") -Force
-    Copy-Item -Path (Join-Path $binDir "argos.ps1") -Destination (Join-Path $npmGlobal "argos.ps1") -Force
-    Write-Host "[Info] Copied argos.cmd to npm global directory: $npmGlobal" -ForegroundColor Cyan
-}
+# Also copy into the npm global bin directory (if npm is installed) so argos is
+# usable in the current terminal without a restart. Resolve the prefix dynamically
+# instead of assuming a fixed machine-specific path.
+try {
+    $npmGlobal = (& npm config get prefix 2>$null)
+    if ($npmGlobal -and (Test-Path $npmGlobal)) {
+        Copy-Item -Path (Join-Path $binDir "argos.cmd") -Destination (Join-Path $npmGlobal "argos.cmd") -Force
+        Copy-Item -Path (Join-Path $binDir "argos.ps1") -Destination (Join-Path $npmGlobal "argos.ps1") -Force
+        Write-Host "[Info] Copied argos.cmd to npm global directory: $npmGlobal" -ForegroundColor Cyan
+    }
+} catch {}
 
 Write-Host "`n[Success] Argos installed successfully!" -ForegroundColor Green
 Write-Host "You can now open ANY terminal and directly type:" -ForegroundColor Yellow

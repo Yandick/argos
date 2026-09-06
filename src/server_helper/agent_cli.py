@@ -51,27 +51,37 @@ if _ROOT not in sys.path:
 from server_helper.config import Config
 from server_helper.theme import get_theme, list_themes, render_swatch, get_prompt_toolkit_style
 from server_helper.ui_picker import interactive_theme_picker, interactive_menu_select
+from server_helper import i18n
+from server_helper.i18n import t as _t
 from session_manager import SessionManager
 
 console = Console()
 
 COMMAND_REGISTRY = [
-    {"cmd": "/server",    "cat": "Remote", "desc": "切换或管理远程目标服务器 (scut-gpu 等)", "usage": "[scut-gpu|add|rename|rm]"},
-    {"cmd": "/files",     "cat": "Remote", "desc": "浏览工作区文件与目录树 (免耗 token)", "usage": "[路径可选]"},
-    {"cmd": "/sh",        "cat": "Remote", "desc": "连接全功能交互式终端 (Ctrl+] 返回)", "usage": ""},
-    {"cmd": "/model",     "cat": "Agent",  "desc": "切换活跃 LLM 模型 (gemini-3.8-flash 等)", "usage": "[gemini-3.8-flash|claude-3-7-sonnet|...]"},
-    {"cmd": "/effort",    "cat": "Agent",  "desc": "调节思考推理深度 (high/med/low/off)", "usage": "[high|medium|low|off]"},
-    {"cmd": "/proxy",     "cat": "System", "desc": "配置 HTTP 代理与 SSH 反向隧道 (10808/7897)", "usage": "[http://127.0.0.1:7897|off]"},
-    {"cmd": "/tasks",     "cat": "Tasks",  "desc": "查看后台任务运行看板与活动状态", "usage": ""},
-    {"cmd": "/switch",    "cat": "Tasks",  "desc": "在多个服务器/本地会话之间快速切换", "usage": "[会话名]"},
-    {"cmd": "/broadcast", "cat": "Remote", "desc": "向全部活跃并发会话广播执行 Shell 命令", "usage": "<shell 指令>"},
-    {"cmd": "/status",    "cat": "System", "desc": "查看目标环境 GPU、显存与系统负载", "usage": ""},
-    {"cmd": "/theme",     "cat": "System", "desc": "切换界面配色主题 (带实时动态预览)", "usage": "[主题名]"},
-    {"cmd": "/config",    "cat": "System", "desc": "查看 setting.json 配置详情", "usage": ""},
-    {"cmd": "/clear",     "cat": "System", "desc": "清屏并重新绘制状态看板", "usage": ""},
-    {"cmd": "/help",      "cat": "System", "desc": "查看完整指令与快捷键指南", "usage": ""},
-    {"cmd": "/exit",      "cat": "System", "desc": "安全退出 Argos 并释放所有连接", "usage": ""},
+    {"cmd": "/server",    "cat": "Remote", "desc_key": "cmd.server", "usage": "[scut-gpu|add|rename|rm]"},
+    {"cmd": "/files",     "cat": "Remote", "desc_key": "cmd.files", "usage": "[path]"},
+    {"cmd": "/sh",        "cat": "Remote", "desc_key": "cmd.sh", "usage": ""},
+    {"cmd": "/model",     "cat": "Agent",  "desc_key": "cmd.model", "usage": "[gemini-3.8-flash|claude-3-7-sonnet|...]"},
+    {"cmd": "/effort",    "cat": "Agent",  "desc_key": "cmd.effort", "usage": "[high|medium|low|off]"},
+    {"cmd": "/proxy",     "cat": "System", "desc_key": "cmd.proxy", "usage": "[http://127.0.0.1:7897|off]"},
+    {"cmd": "/tasks",     "cat": "Tasks",  "desc_key": "cmd.tasks", "usage": ""},
+    {"cmd": "/switch",    "cat": "Tasks",  "desc_key": "cmd.switch", "usage": "[name]"},
+    {"cmd": "/broadcast", "cat": "Remote", "desc_key": "cmd.broadcast", "usage": "<shell cmd>"},
+    {"cmd": "/status",    "cat": "System", "desc_key": "cmd.status", "usage": ""},
+    {"cmd": "/theme",     "cat": "System", "desc_key": "cmd.theme", "usage": "[name]"},
+    {"cmd": "/lang",      "cat": "System", "desc_key": "cmd.lang", "usage": "[en|zh]"},
+    {"cmd": "/config",    "cat": "System", "desc_key": "cmd.config", "usage": ""},
+    {"cmd": "/clear",     "cat": "System", "desc_key": "cmd.clear", "usage": ""},
+    {"cmd": "/help",      "cat": "System", "desc_key": "cmd.help", "usage": ""},
+    {"cmd": "/exit",      "cat": "System", "desc_key": "cmd.exit", "usage": ""},
 ]
+
+
+def _registry_desc(item):
+    """Resolve a registry/candidate item's description in the active language."""
+    if "desc" in item:
+        return item["desc"]
+    return _t(item.get("desc_key", ""))
 
 SLASH_COMMANDS = [item["cmd"] for item in COMMAND_REGISTRY]
 
@@ -87,7 +97,7 @@ class ArgosSlashCompleter(Completer):
                         text=item["cmd"],
                         start_position=-len(text),
                         display=f"{item['cmd']:<12}",
-                        display_meta=f"[{item['cat']}] {item['desc']}"
+                        display_meta=f"[{item['cat']}] {_registry_desc(item)}"
                     )
 
 
@@ -135,6 +145,11 @@ class PiSelectList:
                 ]
             elif raw_cmd == "/theme":
                 candidates = [{"cmd": t["id"], "desc": t["desc"]} for t in list_themes()]
+            elif raw_cmd in ("/lang", "/language"):
+                candidates = [
+                    {"cmd": "en", "desc": "English"},
+                    {"cmd": "zh", "desc": "中文"},
+                ]
             elif raw_cmd in ("/server", "/connect", "/c"):
                 servers = config.get_servers()
                 candidates = [{"cmd": s.get("name", ""), "desc": f"{s.get('user', 'root')}@{s.get('host', '')}"} for s in servers if s.get("name")]
@@ -203,7 +218,7 @@ class PiSelectList:
             prefix = "  → " if is_sel else "    "
             col_w = 14 if not is_arg_mode else 20
             lbl = html.escape(f"{item['cmd']:<{col_w}}")
-            desc = html.escape(item.get("desc", ""))
+            desc = html.escape(_registry_desc(item))
             if is_sel:
                 lines.append(f'<style fg="{p}"><b>{prefix}{lbl}</b></style> <style fg="{txt}">{desc}</style>')
             else:
@@ -218,6 +233,7 @@ class PiSelectList:
 class AgentCliApp:
     def __init__(self):
         self.config = Config()
+        i18n.init_lang(self.config)
         self.session_mgr = SessionManager()
         self.active_session_id = None
         self.history_file = os.path.expanduser("~/.server-helper/cli_history")
@@ -257,7 +273,8 @@ class AgentCliApp:
                     parts = curr_text.split(maxsplit=1)
                     raw_cmd = html.escape(parts[0].lower())
                     err_col = self.theme.get("error", "#f38ba8")
-                    return HTML(f'<style fg="{err_col}">未知命令: {raw_cmd} (输入 /help 查看命令列表)</style>')
+                    msg = _t('toolbar.unknownCmd', cmd=raw_cmd)
+                    return HTML(f'<style fg="{err_col}">{msg}</style>')
 
             # 2. When idle/typing normal prompt, render Pi clean status footer
             session = self._get_active_session()
@@ -285,11 +302,12 @@ class AgentCliApp:
                     f'<style fg="{a}">🤖 {agent}:{model} (effort: {effort})</style> '
                     f'<style fg="{d}">│ {proxy_str} │ [Tab] /help</style>'
                 )
+            idle_hint = _t('toolbar.idleHint', proxy=proxy_str)
             return HTML(
-                f'<style fg="{d}">● idle │ 输入 /server 连接目标环境 │ {proxy_str} │ [Tab] /help</style>'
+                f'<style fg="{d}">● {idle_hint}</style>'
             )
         except Exception:
-            return HTML('<style fg="#9399b2">Argos Agent Orchestrator</style>')
+            return HTML(f'<style fg="#9399b2">{_t("toolbar.fallback")}</style>')
 
     def _init_prompt_session(self):
         try:
@@ -429,26 +447,26 @@ class AgentCliApp:
             srv_str = f"{session.name} ({srv_info.get('user', 'root')}@{srv_info.get('host', 'local')}:{srv_info.get('port', 22)})"
             rdir = session.remote_dir or "/"
             agent_str = f"{session.command or 'agy'} · {session.model or self.config.get_model()}"
-            status_tag = f"[{s}]● running[/{s}]"
+            status_tag = f"[{s}]● {_t('banner.running')}[/{s}]"
         else:
-            srv_str = "Not connected (type /server to select environment)"
+            srv_str = _t('banner.notConnected')
             rdir = "/"
             agent_str = f"{self.config.get_settings().get('default_agent', 'agy')} · {self.config.get_model()}"
-            status_tag = f"[{d}]idle[/{d}]"
+            status_tag = f"[{d}]{_t('banner.idle')}[/{d}]"
 
         effort = self.config.get_thinking_effort()
         proxy = self.config.get_proxy()
-        proxy_str = f"[{s}]{proxy}[/{s}]" if proxy else f"[{d}]direct (no proxy)[/{d}]"
+        proxy_str = f"[{s}]{proxy}[/{s}]" if proxy else f"[{d}]{_t('banner.directNoProxy')}[/{d}]"
 
         card = (
-            f"[{p}]  ▄▀█ █▀█ █▀▀ █▀█ █▀[/{p}]   [{txt}][bold]argos[/bold][/{txt}] [{d}]v0.3.0 · autonomous coding agent orchestrator[/{d}]\n"
-            f"[{p}]  █▀█ █▀▄ █▄█ █▄█ ▄█[/{p}]   [{d}]Ἄργος Πανόπτης · multi-server remote workspace harness[/{d}]\n\n"
-            f"  [{a}]Target:[/{a}]    [{txt}]{srv_str}[/{txt}] {status_tag}\n"
-            f"  [{a}]Workspace:[/{a}] [{p}]{rdir}[/{p}]\n"
-            f"  [{a}]Engine:[/{a}]    [{txt}]{agent_str}[/{txt}] [{d}](effort: {effort})[/{d}]\n"
-            f"  [{a}]Proxy:[/{a}]     {proxy_str}\n"
-            f"  [{a}]Theme:[/{a}]     [{txt}]{t_name}[/{txt}] {swatch}\n\n"
-            f"[{d}]Shortcuts:[/{d}] [{a}]/server[/{a}] [{d}]target[/{d}] · [{a}]/files[/{a}] [{d}]files[/{d}] · [{a}]/sh[/{a}] [{d}]terminal[/{d}] · [{a}]/model[/{a}] [{d}]models[/{d}] · [{a}]/proxy[/{a}] [{d}]proxy[/{d}] · [{a}]/help[/{a}] [{d}]help[/{d}]"
+            f"[{p}]  ▄▀█ █▀█ █▀▀ █▀█ █▀[/{p}]   [{txt}][bold]argos[/bold][/{txt}] [{d}]v0.3.0 · {_t('banner.tagline')}[/{d}]\n"
+            f"[{p}]  █▀█ █▀▄ █▄█ █▄█ ▄█[/{p}]   [{d}]Ἄργος Πανόπτης · {_t('banner.tagline2')}[/{d}]\n\n"
+            f"  [{a}]{_t('banner.target')}:[/{a}]    [{txt}]{srv_str}[/{txt}] {status_tag}\n"
+            f"  [{a}]{_t('banner.workspace')}:[/{a}] [{p}]{rdir}[/{p}]\n"
+            f"  [{a}]{_t('banner.engine')}:[/{a}]    [{txt}]{agent_str}[/{txt}] [{d}]({_t('banner.effort')}: {effort})[/{d}]\n"
+            f"  [{a}]{_t('banner.proxy')}:[/{a}]     {proxy_str}\n"
+            f"  [{a}]{_t('banner.theme')}:[/{a}]     [{txt}]{t_name}[/{txt}] {swatch}\n\n"
+            f"[{d}]{_t('banner.shortcuts')}:[/{d}] [{a}]/server[/{a}] [{d}]{_t('sc.target')}[/{d}] · [{a}]/files[/{a}] [{d}]{_t('sc.files')}[/{d}] · [{a}]/sh[/{a}] [{d}]{_t('sc.terminal')}[/{d}] · [{a}]/model[/{a}] [{d}]{_t('sc.models')}[/{d}] · [{a}]/proxy[/{a}] [{d}]{_t('sc.proxy')}[/{d}] · [{a}]/help[/{a}] [{d}]{_t('sc.help')}[/{d}]"
         )
         return Panel(card, border_style=p, padding=(0, 1))
 
@@ -479,7 +497,7 @@ class AgentCliApp:
             except KeyboardInterrupt:
                 now = time.time()
                 if (now - self._last_sigint_time) < 2.0:
-                    console.print(f"\n[{self.theme['dim']}]Argos session closed. Goodbye![/{self.theme['dim']}]")
+                    console.print(f"\n[{self.theme['dim']}]{_t('run.goodbye')}[/{self.theme['dim']}]")
                     for s in list(self.session_mgr.sessions.values()):
                         try:
                             s.close()
@@ -488,9 +506,9 @@ class AgentCliApp:
                     sys.exit(0)
                 else:
                     self._last_sigint_time = now
-                    console.print(f"\n[{self.theme['warning']}]Press Ctrl+C again to exit, or type /exit[/{self.theme['warning']}]")
+                    console.print(f"\n[{self.theme['warning']}]{_t('run.ctrlCAgain')}[/{self.theme['warning']}]")
             except EOFError:
-                console.print(f"\n[{self.theme['dim']}]Argos session closed. Goodbye![/{self.theme['dim']}]")
+                console.print(f"\n[{self.theme['dim']}]{_t('run.goodbye')}[/{self.theme['dim']}]")
                 for s in list(self.session_mgr.sessions.values()):
                     try:
                         s.close()
@@ -498,7 +516,7 @@ class AgentCliApp:
                         pass
                 sys.exit(0)
             except Exception as e:
-                console.print(f"[{self.theme['error']}]● Error:[/{self.theme['error']}] {e}")
+                console.print(f"[{self.theme['error']}]● {_t('run.error')}:[/{self.theme['error']}] {e}")
 
     def _get_active_session(self):
         if self.active_session_id:
@@ -544,7 +562,7 @@ class AgentCliApp:
             "/theme", "/model", "/effort", "/thinking", "/proxy", "/files",
             "/ls", "/dir", "/tasks", "/sessions", "/switch", "/sw", "/terminal",
             "/term", "/sh", "/agent", "/status", "/broadcast", "/b", "/config",
-            "/close", "/stop"
+            "/close", "/stop", "/lang", "/language"
         ]
         if cmd not in known_cmds:
             candidates = [c for c in SLASH_COMMANDS if c.startswith(cmd)]
@@ -552,7 +570,7 @@ class AgentCliApp:
                 cmd = candidates[0]
 
         if cmd in ("/exit", "/quit"):
-            console.print("[dim]Exiting Argos. Sessions closed.[/dim]")
+            console.print(f"[dim]{_t('run.exiting')}[/dim]")
             for s in list(self.session_mgr.sessions.values()):
                 s.close()
             sys.exit(0)
@@ -607,6 +625,9 @@ class AgentCliApp:
         elif cmd in ("/close", "/stop"):
             self.action_close_task(arg)
 
+        elif cmd == "/lang":
+            self.action_lang(arg)
+
         else:
             console.print(f"[{self.theme['error']}]Unknown command: {cmd}. Type /help for available commands.[/{self.theme['error']}]")
 
@@ -614,28 +635,48 @@ class AgentCliApp:
         p = self.theme["primary"]
         a = self.theme["accent"]
         d = self.theme["dim"]
-        console.print(f"\n[{p}][bold]● Argos Commands[/bold][/{p}]")
+        console.print(f"\n[{p}][bold]● {_t('help.title')}[/bold][/{p}]")
         cmds = [
-            ("/server", "Interactive server manager (↑/↓ to select, [a] add, [r] rename)"),
-            ("/files, /ls", "List files and directories in remote workspace (zero tokens)"),
-            ("/terminal, /sh", "Attach raw interactive terminal to active session (Ctrl+] to detach)"),
-            ("/model [name]", "Select model for agent (gemini-3.8-flash, claude-3-7-sonnet...)"),
-            ("/effort [level]", "Select reasoning & thinking effort (high, medium, low, off)"),
-            ("/proxy [url|off]", "Configure HTTP/HTTPS proxy (e.g. http://127.0.0.1:7897 or off)"),
-            ("/tasks", "List all running sessions and active context"),
-            ("/switch <name|#>", "Switch active session context"),
-            ("/agent <name>", "Switch agent engine (agy, claude, codex, shell)"),
-            ("/status", "Show remote CPU, GPU, memory and load status"),
-            ("/broadcast <cmd>", "Broadcast shell command to all sessions"),
-            ("/theme [name]", "Interactive theme picker with live real-time preview (↑/↓ to preview)"),
-            ("/close [name|#]", "Close a running session"),
-            ("/config", "Show config file path and default settings"),
-            ("/clear", "Clear screen and refresh dashboard"),
-            ("/exit, /quit", "Exit Argos")
+            ("/server", "help.server"),
+            ("/files, /ls", "help.files"),
+            ("/terminal, /sh", "help.terminal"),
+            ("/model [name]", "help.model"),
+            ("/effort [level]", "help.effort"),
+            ("/proxy [url|off]", "help.proxy"),
+            ("/tasks", "help.tasks"),
+            ("/switch <name|#>", "help.switch"),
+            ("/agent <name>", "help.agent"),
+            ("/status", "help.status"),
+            ("/broadcast <cmd>", "help.broadcast"),
+            ("/theme [name]", "help.theme"),
+            ("/lang [en|zh]", "help.lang"),
+            ("/close [name|#]", "help.close"),
+            ("/config", "help.config"),
+            ("/clear", "help.clear"),
+            ("/exit, /quit", "help.exit"),
         ]
-        for c, desc in cmds:
-            console.print(f"  [{a}]{c:<20}[/{a}] [{d}]{desc}[/{d}]")
+        for c, desc_key in cmds:
+            console.print(f"  [{a}]{c:<20}[/{a}] [{d}]{_t(desc_key)}[/{d}]")
         console.print()
+
+    def action_lang(self, arg=""):
+        """Switch the interface language (en/zh) and persist it to setting.json."""
+        arg = (arg or "").strip().lower()
+        if not arg:
+            new_lang = "zh" if i18n.get_lang() == "en" else "en"
+        elif arg in ("en", "zh", "english", "chinese", "cn", "zh-cn", "zh_cn"):
+            new_lang = arg
+        else:
+            console.print(f"[{self.theme['warning']}]● {_t('lang.invalid')}[/{self.theme['warning']}]")
+            return
+        new_lang = i18n.set_lang(new_lang)
+        try:
+            self.config.update_settings({"language": new_lang})
+        except Exception:
+            pass
+        console.clear()
+        console.print(self.render_header())
+        console.print(f"[{self.theme['success']}]● {_t('lang.switched')}[/{self.theme['success']}]\n")
 
     def action_theme(self, arg=""):
         arg = (arg or "").strip().lower()
@@ -1038,7 +1079,8 @@ class AgentCliApp:
                 key_path = input("› Private key path [~/.ssh/id_rsa]: ").strip() or "~/.ssh/id_rsa"
             else:
                 auth_type = "password"
-                password = input("› Password: ").strip()
+                import getpass
+                password = getpass.getpass("› Password: ").strip()
 
             default_dir = input("› Default directory [/data/workspace]: ").strip() or "/data/workspace"
 
@@ -1234,16 +1276,25 @@ class AgentCliApp:
                         if ch in (b'\x00', b'\xe0'):
                             ch2 = msvcrt.getch() if msvcrt.kbhit() else b''
                             arrow_map = {
-                                b'H': b'\x1b[A',  # Up
-                                b'P': b'\x1b[B',  # Down
-                                b'M': b'\x1b[C',  # Right
-                                b'K': b'\x1b[D',  # Left
-                                b'G': b'\x1b[H',  # Home
-                                b'O': b'\x1b[F',  # End
-                                b'S': b'\x1b[3~', # Delete
+                                b'H': '\x1b[A',  # Up
+                                b'P': '\x1b[B',  # Down
+                                b'M': '\x1b[C',  # Right
+                                b'K': '\x1b[D',  # Left
+                                b'G': '\x1b[H',  # Home
+                                b'O': '\x1b[F',  # End
+                                b'S': '\x1b[3~', # Delete
+                                b'I': '\x1b[5~', # PgUp
+                                b'Q': '\x1b[6~', # PgDn
                             }
-                            code = arrow_map.get(ch2, ch + ch2)
-                            session.backend.write(code)
+                            # Always send str: LocalPty (pywinpty) requires str, and
+                            # unmapped function keys are ignored rather than sent as
+                            # raw prefix bytes that would corrupt the remote shell.
+                            code = arrow_map.get(ch2)
+                            if code is not None:
+                                try:
+                                    session.backend.write(code)
+                                except Exception:
+                                    pass
                         else:
                             try:
                                 session.backend.write(ch.decode("latin1"))

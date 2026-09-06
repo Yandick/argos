@@ -5,6 +5,7 @@ Handles output buffering, WebSocket broadcasting, and session lifecycle.
 """
 import time
 import uuid
+import shlex
 import threading
 from remote_ssh import SSHSession
 from local_pty import LocalPtySession
@@ -55,12 +56,14 @@ class Session:
                 pass
 
         # Broadcast to attached websockets (if Web UI running)
-        if self.ws_clients:
+        with self._lock:
+            clients = list(self.ws_clients)
+        if clients:
             try:
                 import tornado.ioloop
                 loop = tornado.ioloop.IOLoop.current(instance=False)
                 dead_clients = set()
-                for ws in list(self.ws_clients):
+                for ws in clients:
                     try:
                         if loop:
                             loop.add_callback(ws.write_message, text)
@@ -69,7 +72,8 @@ class Session:
                     except Exception:
                         dead_clients.add(ws)
                 if dead_clients:
-                    self.ws_clients.difference_update(dead_clients)
+                    with self._lock:
+                        self.ws_clients.difference_update(dead_clients)
             except Exception:
                 pass
 
@@ -110,17 +114,25 @@ class SessionManager:
 
             # Combine remote_dir with startup_cmd if provided
             full_init_cmd = ""
-            r_proxy_port = server_info.get("remote_proxy_port") or 10808
+            try:
+                r_proxy_port = int(server_info.get("remote_proxy_port") or 10808)
+            except (TypeError, ValueError):
+                r_proxy_port = 10808
             try:
                 from server_helper.config import Config
                 proxy_url = Config().get_proxy()
                 if proxy_url:
-                    full_init_cmd += f"export http_proxy='http://127.0.0.1:{r_proxy_port}' https_proxy='http://127.0.0.1:{r_proxy_port}' all_proxy='http://127.0.0.1:{r_proxy_port}' 2>/dev/null; "
+                    proxy_addr = f"http://127.0.0.1:{r_proxy_port}"
+                    full_init_cmd += (
+                        f"export http_proxy={shlex.quote(proxy_addr)} "
+                        f"https_proxy={shlex.quote(proxy_addr)} "
+                        f"all_proxy={shlex.quote(proxy_addr)} 2>/dev/null; "
+                    )
             except Exception:
                 pass
 
             if remote_dir:
-                full_init_cmd += f"cd '{remote_dir}' 2>/dev/null || cd {remote_dir}\n"
+                full_init_cmd += f"cd {shlex.quote(remote_dir)} 2>/dev/null\n"
             if startup_cmd:
                 full_init_cmd += startup_cmd.strip() + "\n"
 
@@ -182,19 +194,22 @@ class SessionManager:
         session = self.get_session(session_id)
         if not session:
             return False
-        session.ws_clients.add(ws_handler)
+        with session._lock:
+            session.ws_clients.add(ws_handler)
+            scrollback = session.scrollback
         # Replay scrollback buffer so terminal looks identical
-        if session.scrollback:
+        if scrollback:
             try:
-                ws_handler.write_message(session.scrollback)
+                ws_handler.write_message(scrollback)
             except Exception:
                 pass
         return True
 
     def detach_ws(self, session_id, ws_handler):
         session = self.get_session(session_id)
-        if session and ws_handler in session.ws_clients:
-            session.ws_clients.remove(ws_handler)
+        if session:
+            with session._lock:
+                session.ws_clients.discard(ws_handler)
 
     def write(self, session_id, data):
         session = self.get_session(session_id)

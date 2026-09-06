@@ -4,7 +4,11 @@ Windows Local PTY Process Manager via pywinpty
 import os
 import sys
 import shutil
-from winpty import PtyProcess
+
+try:
+    from winpty import PtyProcess
+except ImportError:  # non-Windows platform or pywinpty not installed
+    PtyProcess = None
 
 
 class LocalPty:
@@ -15,6 +19,8 @@ class LocalPty:
         self.is_alive = False
 
     def start(self, cols=120, rows=30):
+        if PtyProcess is None:
+            raise RuntimeError("本地 PTY 需要 pywinpty（仅支持 Windows）。请在 Windows 上运行，或改用远程 SSH 会话。")
         cmdline = self._resolve_cmd(self.cmd)
         cwd = self.cwd if (self.cwd and os.path.isdir(self.cwd)) else os.getcwd()
         self.pty = PtyProcess.spawn(cmdline, cwd=cwd, dimensions=(max(5, rows), max(10, cols)))
@@ -24,8 +30,8 @@ class LocalPty:
     def _resolve_cmd(self, cmd):
         cmd = cmd.strip()
         if cmd == "claude" or cmd.startswith("claude "):
-            claude_cmd = shutil.which("claude.cmd") or shutil.which("claude.exe") or r"D:\nodejs\node_global\claude.cmd"
-            if os.path.exists(claude_cmd):
+            claude_cmd = shutil.which("claude.cmd") or shutil.which("claude.exe") or shutil.which("claude")
+            if claude_cmd and os.path.exists(claude_cmd):
                 return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{claude_cmd}\' {cmd[6:]}"'
             return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
 

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ServerHelper - 本地 Agent 远程多任务工作台</title>
+  <title>ServerHelper</title>
   <link rel="stylesheet" href="/vendor/xterm.css">
   <link rel="stylesheet" href="/css/style.css">
 </head>
@@ -16,13 +16,13 @@
         <div class="brand-icon">⚡</div>
         <span>ServerHelper</span>
       </div>
-      <div class="mem-tag" id="stat-mem" title="应用常驻内存">-- MB</div>
+      <div class="mem-tag" id="stat-mem" data-i18n-title="mem.title">-- MB</div>
     </div>
 
     <div class="sidebar-section">
       <div class="section-header">
-        <span class="section-title">任务工作区</span>
-        <button class="btn btn-primary btn-sm" onclick="app.openNewTaskModal()">+ 新建任务</button>
+        <span class="section-title" data-i18n="sidebar.workspace">任务工作区</span>
+        <button class="btn btn-primary btn-sm" onclick="app.openNewTaskModal()" data-i18n="sidebar.newTask">+ 新建任务</button>
       </div>
       <div class="task-list" id="task-list">
         <!-- Task items dynamically rendered -->
@@ -31,13 +31,16 @@
 
     <div class="sidebar-footer">
       <button class="btn btn-secondary btn-sm" style="width: 100%; justify-content: flex-start;" onclick="app.openServerModal()">
-        <span>🖥️ 服务器管理</span>
+        <span data-i18n="sidebar.servers">🖥️ 服务器管理</span>
       </button>
       <button class="btn btn-secondary btn-sm" style="width: 100%; justify-content: flex-start;" onclick="app.openSettingsModal()">
-        <span>⚙️ Agent 模型配置</span>
+        <span data-i18n="sidebar.agentConfig">⚙️ Agent 模型配置</span>
       </button>
       <button class="btn btn-secondary btn-sm" style="width: 100%; justify-content: flex-start;" onclick="app.openBroadcastModal()">
-        <span>📢 全局多任务广播</span>
+        <span data-i18n="sidebar.broadcast">📢 全局多任务广播</span>
+      </button>
+      <button class="btn btn-secondary btn-sm" style="width: 100%; justify-content: flex-start;" onclick="i18n.toggle()" id="btn-lang">
+        <span data-i18n="sidebar.language">🌐 Language</span>
       </button>
     </div>
   </aside>
@@ -53,16 +56,16 @@
 
       <!-- View Mode Switcher -->
       <div class="view-mode-tabs">
-        <button class="view-mode-btn" id="btn-mode-agent" onclick="app.setViewMode('agent')">🤖 Agent 对话</button>
-        <button class="view-mode-btn active" id="btn-mode-terminal" onclick="app.setViewMode('terminal')">🖥️ 实时终端</button>
-        <button class="view-mode-btn" id="btn-mode-split" onclick="app.setViewMode('split')">🔲 左右分屏</button>
+        <button class="view-mode-btn" id="btn-mode-agent" onclick="app.setViewMode('agent')" data-i18n="toolbar.modeAgent">🤖 Agent 对话</button>
+        <button class="view-mode-btn active" id="btn-mode-terminal" onclick="app.setViewMode('terminal')" data-i18n="toolbar.modeTerminal">🖥️ 实时终端</button>
+        <button class="view-mode-btn" id="btn-mode-split" onclick="app.setViewMode('split')" data-i18n="toolbar.modeSplit">🔲 左右分屏</button>
       </div>
 
       <div style="display: flex; align-items: center; gap: 8px;">
-        <button class="btn btn-secondary btn-sm" onclick="app.openFileDrawer()" id="btn-open-files">📁 远程文件</button>
-        <button class="btn btn-secondary btn-sm" onclick="app.checkGPU()">⚡ 硬件状态</button>
-        <button class="btn btn-secondary btn-sm" style="color: var(--warning);" onclick="app.stopCurrentAgent()" id="btn-stop-agent">⏹️ 停止 Agent</button>
-        <button class="btn btn-secondary btn-sm" style="color: var(--danger);" onclick="app.closeCurrentTask()">✕ 关闭任务</button>
+        <button class="btn btn-secondary btn-sm" onclick="app.openFileDrawer()" id="btn-open-files" data-i18n="toolbar.files">📁 远程文件</button>
+        <button class="btn btn-secondary btn-sm" onclick="app.checkGPU()" data-i18n="toolbar.hardware">⚡ 硬件状态</button>
+        <button class="btn btn-secondary btn-sm" style="color: var(--warning);" onclick="app.stopCurrentAgent()" id="btn-stop-agent" data-i18n="toolbar.stopAgent">⏹️ 停止 Agent</button>
+        <button class="btn btn-secondary btn-sm" style="color: var(--danger);" onclick="app.closeCurrentTask()" data-i18n="toolbar.closeTask">✕ 关闭任务</button>
       </div>
     </header>
 
@@ -71,30 +74,30 @@
       <!-- Empty Placeholder -->
       <div class="empty-placeholder" id="empty-placeholder">
         <div style="font-size: 46px; margin-bottom: 8px;">🚀</div>
-        <h2 style="color: #fff; font-size: 18px;">暂无运行中的任务工作区</h2>
-        <p style="max-width: 460px; font-size: 13px; line-height: 1.6;">
+        <h2 style="color: #fff; font-size: 18px;" data-i18n="empty.title">暂无运行中的任务工作区</h2>
+        <p style="max-width: 460px; font-size: 13px; line-height: 1.6;" data-i18n="empty.desc">
           点击左上角「+ 新建任务」连接远程服务器，即可在当前窗口中同时并发管理多个项目任务，接入本地 Coding Agent 进行自动化推理、代码审查与执行。
         </p>
-        <button class="btn btn-primary" onclick="app.openNewTaskModal()">+ 立即创建第一个任务</button>
+        <button class="btn btn-primary" onclick="app.openNewTaskModal()" data-i18n="empty.createFirst">+ 立即创建第一个任务</button>
       </div>
 
       <!-- Agent Chat Panel -->
       <div class="agent-panel" id="agent-panel">
         <div class="agent-messages-container" id="agent-messages">
-          <div style="text-align: center; color: var(--text-muted); font-size: 13px; margin: auto;">
+          <div style="text-align: center; color: var(--text-muted); font-size: 13px; margin: auto;" data-i18n="agent.ready">
             🤖 Agent 已就绪。请在下方输入需求（如排查当前代码报错、检查 GPU 显存或执行开发任务）。
           </div>
         </div>
 
         <div class="agent-input-bar">
           <div class="prompt-suggestions">
-            <span class="prompt-chip" onclick="app.fillPrompt('检查当前远程工作目录的文件结构和代码')">📁 查看目录代码</span>
-            <span class="prompt-chip" onclick="app.fillPrompt('查看当前服务器显卡 GPU 显存与 CPU 内存占用')">⚡ 检查 GPU/硬件负载</span>
-            <span class="prompt-chip" onclick="app.fillPrompt('执行 git status 查看最新代码分支与变动')">🌿 检查 Git 状态</span>
+            <span class="prompt-chip" data-i18n="agent.chipFiles" data-prompt="agent.chipFiles.prompt" onclick="app.fillPromptI18n(this)">📁 查看目录代码</span>
+            <span class="prompt-chip" data-i18n="agent.chipGpu" data-prompt="agent.chipGpu.prompt" onclick="app.fillPromptI18n(this)">⚡ 检查 GPU/硬件负载</span>
+            <span class="prompt-chip" data-i18n="agent.chipGit" data-prompt="agent.chipGit.prompt" onclick="app.fillPromptI18n(this)">🌿 检查 Git 状态</span>
           </div>
           <div class="prompt-input-row">
-            <textarea id="agent-input" class="agent-textarea" placeholder="向该远程任务的 Coding Agent 下发指令... (按 Enter 发送，Shift+Enter 换行)"></textarea>
-            <button class="btn btn-primary" style="height: 48px; padding: 0 18px;" onclick="app.sendAgentPrompt()">发送指令</button>
+            <textarea id="agent-input" class="agent-textarea" data-i18n-placeholder="agent.inputPlaceholder" placeholder="向该远程任务的 Coding Agent 下发指令... (按 Enter 发送，Shift+Enter 换行)"></textarea>
+            <button class="btn btn-primary" style="height: 48px; padding: 0 18px;" onclick="app.sendAgentPrompt()" data-i18n="agent.send">发送指令</button>
           </div>
         </div>
       </div>
@@ -106,7 +109,7 @@
           <button class="btn btn-secondary btn-sm" onclick="app.sendTermCmd('ls -la')">ls -la</button>
           <button class="btn btn-secondary btn-sm" onclick="app.sendTermCmd('git status')">git status</button>
           <button class="btn btn-secondary btn-sm" style="color: var(--warning);" onclick="app.sendTermCtrlC()">Ctrl+C</button>
-          <button class="btn btn-secondary btn-sm" onclick="app.clearCurrentTerm()">清屏</button>
+          <button class="btn btn-secondary btn-sm" onclick="app.clearCurrentTerm()" data-i18n="terminal.clear">清屏</button>
         </div>
         <div class="terminals-stage" id="terminals-stage">
           <!-- xterm containers rendered here -->
@@ -117,11 +120,11 @@
       <div class="file-drawer" id="file-drawer">
         <div class="drawer-header">
           <div>
-            <strong style="font-size: 13px;">📁 远程文件列表</strong>
+            <strong style="font-size: 13px;" data-i18n="files.title">📁 远程文件列表</strong>
             <div id="drawer-path" style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); max-width: 260px; overflow: hidden; text-overflow: ellipsis;"></div>
           </div>
           <div style="display: flex; gap: 6px;">
-            <button class="btn btn-secondary btn-sm" onclick="app.refreshFiles()">刷新</button>
+            <button class="btn btn-secondary btn-sm" onclick="app.refreshFiles()" data-i18n="files.refresh">刷新</button>
             <button class="btn btn-secondary btn-sm" onclick="app.closeFileDrawer()">✕</button>
           </div>
         </div>
@@ -134,57 +137,57 @@
   <div class="modal-overlay" id="modal-new-task">
     <div class="modal-box">
       <div class="modal-header">
-        <div>新建任务工作区</div>
+        <div data-i18n="newTask.title">新建任务工作区</div>
         <div style="cursor: pointer;" onclick="app.closeModal('modal-new-task')">✕</div>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">任务名称 (识别标识)</label>
-          <input type="text" id="task-name" class="form-control" placeholder="输入任务名称">
+          <label class="form-label" data-i18n="newTask.nameLabel">任务名称 (识别标识)</label>
+          <input type="text" id="task-name" class="form-control" data-i18n-placeholder="newTask.namePh" placeholder="输入任务名称">
         </div>
 
         <div class="form-group">
-          <label class="form-label">任务运行模式</label>
+          <label class="form-label" data-i18n="newTask.modeLabel">任务运行模式</label>
           <select id="task-mode" class="form-control" onchange="app.toggleTaskMode()">
-            <option value="remote_ssh">🌐 远程 SSH & Agent 任务 (直连服务器)</option>
-            <option value="local_pty">💻 本地 Agent 终端 (Claude Code / agy / PowerShell)</option>
+            <option value="remote_ssh" data-i18n="newTask.modeRemote">🌐 远程 SSH & Agent 任务 (直连服务器)</option>
+            <option value="local_pty" data-i18n="newTask.modeLocal">💻 本地 Agent 终端 (Claude Code / agy / PowerShell)</option>
           </select>
         </div>
 
         <div id="group-remote-fields">
           <div class="form-group">
-            <label class="form-label">目标远程服务器</label>
+            <label class="form-label" data-i18n="newTask.serverLabel">目标远程服务器</label>
             <div style="display: flex; gap: 8px;">
               <select id="task-server-id" class="form-control" style="flex: 1;"></select>
-              <button class="btn btn-secondary btn-sm" onclick="app.openServerModal()">+ 管理服务器</button>
+              <button class="btn btn-secondary btn-sm" onclick="app.openServerModal()" data-i18n="newTask.manageServers">+ 管理服务器</button>
             </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label">远程工作目录 (自动 cd 进入)</label>
-            <input type="text" id="task-remote-dir" class="form-control" placeholder="例如: /home/user/workspace/project">
+            <label class="form-label" data-i18n="newTask.dirLabel">远程工作目录 (自动 cd 进入)</label>
+            <input type="text" id="task-remote-dir" class="form-control" data-i18n-placeholder="newTask.dirPh" placeholder="例如: /home/user/workspace/project">
           </div>
 
           <div class="form-group">
-            <label class="form-label">初始化启动指令 (可选)</label>
-            <input type="text" id="task-startup-cmd" class="form-control" placeholder="例如: conda activate py310">
+            <label class="form-label" data-i18n="newTask.startupLabel">初始化启动指令 (可选)</label>
+            <input type="text" id="task-startup-cmd" class="form-control" data-i18n-placeholder="newTask.startupPh" placeholder="例如: conda activate py310">
           </div>
         </div>
 
         <div id="group-local-fields" style="display: none;">
           <div class="form-group">
-            <label class="form-label">本地 Agent 命令行</label>
-            <input type="text" id="task-local-cmd" class="form-control" value="claude" placeholder="claude 或 agy 或 powershell">
+            <label class="form-label" data-i18n="newTask.localCmdLabel">本地 Agent 命令行</label>
+            <input type="text" id="task-local-cmd" class="form-control" value="claude" data-i18n-placeholder="newTask.localCmdPh" placeholder="claude 或 agy 或 powershell">
           </div>
           <div class="form-group">
-            <label class="form-label">本地工作目录 (可选)</label>
-            <input type="text" id="task-local-cwd" class="form-control" placeholder="留空为默认工程目录">
+            <label class="form-label" data-i18n="newTask.localCwdLabel">本地工作目录 (可选)</label>
+            <input type="text" id="task-local-cwd" class="form-control" data-i18n-placeholder="newTask.localCwdPh" placeholder="留空为默认工程目录">
           </div>
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="app.closeModal('modal-new-task')">取消</button>
-        <button class="btn btn-primary" onclick="app.submitCreateTask()">创建并连接</button>
+        <button class="btn btn-secondary" onclick="app.closeModal('modal-new-task')" data-i18n="common.cancel">取消</button>
+        <button class="btn btn-primary" onclick="app.submitCreateTask()" data-i18n="newTask.submit">创建并连接</button>
       </div>
     </div>
   </div>
@@ -193,68 +196,68 @@
   <div class="modal-overlay" id="modal-servers">
     <div class="modal-box lg">
       <div class="modal-header">
-        <div>远程服务器管理</div>
+        <div data-i18n="servers.title">远程服务器管理</div>
         <div style="cursor: pointer;" onclick="app.closeModal('modal-servers')">✕</div>
       </div>
       <div class="modal-body">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <span style="font-size: 13px; color: var(--text-secondary);">已配置的远程服务器</span>
-          <button class="btn btn-secondary btn-sm" onclick="app.showAddServerForm()">+ 添加服务器</button>
+          <span style="font-size: 13px; color: var(--text-secondary);" data-i18n="servers.configured">已配置的远程服务器</span>
+          <button class="btn btn-secondary btn-sm" onclick="app.showAddServerForm()" data-i18n="servers.add">+ 添加服务器</button>
         </div>
 
         <div id="servers-list" style="margin-bottom: 16px;"></div>
 
         <!-- Add/Edit Server Form -->
         <div id="server-form-card" style="background: var(--bg-tertiary); padding: 14px; border-radius: 8px; border: 1px solid var(--border-color); display: none;">
-          <div style="font-weight: 600; margin-bottom: 12px;" id="server-form-title">添加新服务器</div>
+          <div style="font-weight: 600; margin-bottom: 12px;" id="server-form-title" data-i18n="servers.formTitleAdd">添加新服务器</div>
           <input type="hidden" id="srv-id">
           <div class="form-row">
             <div class="form-group" style="flex: 2;">
-              <label class="form-label">服务器名称 / 备注</label>
-              <input type="text" id="srv-name" class="form-control" placeholder="例如: 远程训练服务器 A">
+              <label class="form-label" data-i18n="servers.nameLabel">服务器名称 / 备注</label>
+              <input type="text" id="srv-name" class="form-control" data-i18n-placeholder="servers.namePh" placeholder="例如: 远程训练服务器 A">
             </div>
             <div class="form-group" style="flex: 2;">
-              <label class="form-label">主机 IP / 域名</label>
+              <label class="form-label" data-i18n="servers.hostLabel">主机 IP / 域名</label>
               <input type="text" id="srv-host" class="form-control" placeholder="192.168.1.100">
             </div>
             <div class="form-group" style="flex: 1;">
-              <label class="form-label">端口</label>
+              <label class="form-label" data-i18n="servers.portLabel">端口</label>
               <input type="number" id="srv-port" class="form-control" value="22">
             </div>
           </div>
           <div class="form-row">
             <div class="form-group" style="flex: 1;">
-              <label class="form-label">登录用户名</label>
+              <label class="form-label" data-i18n="servers.userLabel">登录用户名</label>
               <input type="text" id="srv-user" class="form-control" value="root">
             </div>
             <div class="form-group" style="flex: 1;">
-              <label class="form-label">认证方式</label>
+              <label class="form-label" data-i18n="servers.authLabel">认证方式</label>
               <select id="srv-auth-type" class="form-control" onchange="app.toggleAuthType()">
-                <option value="key">SSH 私钥认证</option>
-                <option value="password">密码认证</option>
+                <option value="key" data-i18n="servers.authKey">SSH 私钥认证</option>
+                <option value="password" data-i18n="servers.authPassword">密码认证</option>
               </select>
             </div>
           </div>
           <div class="form-group" id="srv-key-group">
-            <label class="form-label">SSH 私钥路径 (留空则尝试默认 ~/.ssh/id_rsa)</label>
-            <input type="text" id="srv-key-path" class="form-control" placeholder="C:\Users\用户名\.ssh\id_rsa">
+            <label class="form-label" data-i18n="servers.keyPathLabel">SSH 私钥路径 (留空则尝试默认 ~/.ssh/id_rsa)</label>
+            <input type="text" id="srv-key-path" class="form-control" data-i18n-placeholder="servers.keyPathPh" placeholder="C:\Users\用户名\.ssh\id_rsa">
           </div>
           <div class="form-group" id="srv-pwd-group" style="display: none;">
-            <label class="form-label">SSH 登录密码</label>
-            <input type="password" id="srv-password" class="form-control" placeholder="输入服务器密码">
+            <label class="form-label" data-i18n="servers.passwordLabel">SSH 登录密码</label>
+            <input type="password" id="srv-password" class="form-control" data-i18n-placeholder="servers.passwordPh" placeholder="输入服务器密码">
           </div>
           <div class="form-group">
-            <label class="form-label">默认远程基准工作目录</label>
+            <label class="form-label" data-i18n="servers.defaultDirLabel">默认远程基准工作目录</label>
             <input type="text" id="srv-default-dir" class="form-control" placeholder="/home/root/workspace">
           </div>
           <div style="display: flex; justify-content: flex-end; gap: 8px;">
-            <button class="btn btn-secondary btn-sm" onclick="app.hideServerForm()">取消</button>
-            <button class="btn btn-primary btn-sm" onclick="app.saveServer()">保存服务器</button>
+            <button class="btn btn-secondary btn-sm" onclick="app.hideServerForm()" data-i18n="common.cancel">取消</button>
+            <button class="btn btn-primary btn-sm" onclick="app.saveServer()" data-i18n="servers.save">保存服务器</button>
           </div>
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="app.closeModal('modal-servers')">关闭</button>
+        <button class="btn btn-secondary" onclick="app.closeModal('modal-servers')" data-i18n="common.close">关闭</button>
       </div>
     </div>
   </div>
@@ -263,11 +266,11 @@
   <div class="modal-overlay" id="modal-settings">
     <div class="modal-box">
       <div class="modal-header">
-        <div>⚙️ Agent 大模型配置</div>
+        <div data-i18n="settings.title">⚙️ Agent 大模型配置</div>
         <div style="cursor: pointer;" onclick="app.closeModal('modal-settings')">✕</div>
       </div>
       <div class="modal-body">
-        <p style="font-size: 12.5px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.5;">
+        <p style="font-size: 12.5px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.5;" data-i18n="settings.desc">
           配置 OpenAI 兼容格式的大模型接口（支持 DeepSeek、Claude、OpenAI、Qwen、本地 Ollama 等），用于驱动内置远程 Coding Agent 进行自主代码分析与多步任务执行。
         </p>
         <div class="form-group">
@@ -279,13 +282,13 @@
           <input type="password" id="cfg-api-key" class="form-control" placeholder="sk-...">
         </div>
         <div class="form-group">
-          <label class="form-label">模型名称 (Model)</label>
+          <label class="form-label" data-i18n="settings.modelLabel">模型名称 (Model)</label>
           <input type="text" id="cfg-model" class="form-control" placeholder="deepseek-chat 或 claude-3-5-sonnet">
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="app.closeModal('modal-settings')">取消</button>
-        <button class="btn btn-primary" onclick="app.saveSettings()">保存配置</button>
+        <button class="btn btn-secondary" onclick="app.closeModal('modal-settings')" data-i18n="common.cancel">取消</button>
+        <button class="btn btn-primary" onclick="app.saveSettings()" data-i18n="settings.save">保存配置</button>
       </div>
     </div>
   </div>
@@ -294,20 +297,20 @@
   <div class="modal-overlay" id="modal-broadcast">
     <div class="modal-box">
       <div class="modal-header">
-        <div>📢 全局任务广播</div>
+        <div data-i18n="broadcast.title">📢 全局任务广播</div>
         <div style="cursor: pointer;" onclick="app.closeModal('modal-broadcast')">✕</div>
       </div>
       <div class="modal-body">
-        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;" data-i18n-html="broadcast.desc">
           此命令将同时发送给当前<strong>所有运行中</strong>的任务会话：
         </p>
         <div class="form-group">
-          <input type="text" id="broadcast-cmd" class="form-control" placeholder="例如: nvidia-smi 或 git pull">
+          <input type="text" id="broadcast-cmd" class="form-control" data-i18n-placeholder="broadcast.ph" placeholder="例如: nvidia-smi 或 git pull">
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="app.closeModal('modal-broadcast')">取消</button>
-        <button class="btn btn-primary" onclick="app.submitBroadcast()">发送广播</button>
+        <button class="btn btn-secondary" onclick="app.closeModal('modal-broadcast')" data-i18n="common.cancel">取消</button>
+        <button class="btn btn-primary" onclick="app.submitBroadcast()" data-i18n="broadcast.send">发送广播</button>
       </div>
     </div>
   </div>
@@ -316,20 +319,21 @@
   <div class="modal-overlay" id="modal-preview">
     <div class="modal-box lg" style="max-width: 820px;">
       <div class="modal-header">
-        <div id="preview-filename">文件预览</div>
+        <div id="preview-filename" data-i18n="preview.title">文件预览</div>
         <div style="cursor: pointer;" onclick="app.closeModal('modal-preview')">✕</div>
       </div>
       <div class="modal-body" style="background: #090c13; padding: 0;">
         <pre id="preview-content" style="padding: 16px; font-family: var(--font-mono); font-size: 12px; color: #cbd5e1; overflow-x: auto; white-space: pre-wrap; max-height: 60vh;"></pre>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="app.closeModal('modal-preview')">关闭</button>
+        <button class="btn btn-secondary" onclick="app.closeModal('modal-preview')" data-i18n="common.close">关闭</button>
       </div>
     </div>
   </div>
 
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/xterm-addon-fit.js"></script>
+  <script src="/js/i18n.js"></script>
   <script src="/js/terminal.js"></script>
   <script src="/js/app.js"></script>
 </body>

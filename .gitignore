@@ -8,3 +8,9 @@ data/
 *.log
 .DS_Store
 Thumbs.db
+
+# 本地配置（可能含密码/密钥，绝不提交；模板见 setting.example.json）
+setting.json
+
+# 临时截图
+imgs/
