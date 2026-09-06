@@ -13,6 +13,7 @@ import sys
 import time
 import shutil
 import threading
+import html
 
 if sys.platform == "win32":
     try:
@@ -101,6 +102,119 @@ POPULAR_MODELS = [
 ]
 
 
+class PiSelectList:
+    """
+    Faithful implementation of Pi's SelectList component (from badlogic/pi-mono):
+    - Maximum 5 visible items with (startIndex/total) pagination
+    - Selected item marked with '  → ' and highlighted in theme primary
+    - Unselected items marked with '    ' in theme dim
+    - Live fuzzy/prefix filtering that persists seamlessly across Backspace
+    - Up/Down arrow key navigation & Tab/Enter selection
+    """
+    def __init__(self, max_visible=5):
+        self.max_visible = max_visible
+        self.selected_index = 0
+
+    def get_items(self, text, config, session_mgr):
+        if not text.startswith("/"):
+            return []
+        parts = text.split(maxsplit=1)
+        raw_cmd = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
+        arg_lower = arg.lower()
+
+        if " " in text:
+            if raw_cmd == "/model":
+                candidates = [{"cmd": m["label"], "desc": m["desc"]} for m in POPULAR_MODELS]
+            elif raw_cmd in ("/effort", "/thinking"):
+                candidates = [
+                    {"cmd": "high", "desc": "Full reasoning capability (recommended)"},
+                    {"cmd": "medium", "desc": "Balanced reasoning speed"},
+                    {"cmd": "low", "desc": "Fast output, minimal overhead"},
+                    {"cmd": "off", "desc": "Disable extended thinking"},
+                ]
+            elif raw_cmd == "/theme":
+                candidates = [{"cmd": t["id"], "desc": t["desc"]} for t in list_themes()]
+            elif raw_cmd in ("/server", "/connect", "/c"):
+                servers = config.get_servers()
+                candidates = [{"cmd": s.get("name", ""), "desc": f"{s.get('user', 'root')}@{s.get('host', '')}"} for s in servers if s.get("name")]
+                candidates.extend([
+                    {"cmd": "add", "desc": "Add a new target server"},
+                    {"cmd": "rename", "desc": "Rename an existing server"},
+                    {"cmd": "rm", "desc": "Delete an existing server"},
+                ])
+            elif raw_cmd in ("/close", "/stop", "/switch", "/sw"):
+                candidates = [{"cmd": s.name, "desc": f"Session {s.session_id}"} for s in session_mgr.sessions.values()]
+            else:
+                candidates = []
+
+            if not candidates:
+                return []
+            if arg:
+                matches = [c for c in candidates if c["cmd"].lower().startswith(arg_lower)]
+                if not matches:
+                    matches = [c for c in candidates if arg_lower in c["cmd"].lower()]
+                return matches
+            return candidates
+
+        matches = [c for c in COMMAND_REGISTRY if c["cmd"].lower().startswith(raw_cmd)]
+        if not matches:
+            matches = [c for c in COMMAND_REGISTRY if raw_cmd in c["cmd"].lower()]
+        return matches
+
+    def move_up(self, total):
+        if total > 0:
+            self.selected_index = (self.selected_index - 1) % total
+
+    def move_down(self, total):
+        if total > 0:
+            self.selected_index = (self.selected_index + 1) % total
+
+    def get_selected(self, text, config, session_mgr):
+        items = self.get_items(text, config, session_mgr)
+        if not items:
+            return None
+        if self.selected_index >= len(items):
+            self.selected_index = 0
+        return items[self.selected_index]
+
+    def render(self, text, current_theme, config, session_mgr):
+        items = self.get_items(text, config, session_mgr)
+        if not items:
+            return None
+
+        if self.selected_index >= len(items):
+            self.selected_index = 0
+
+        p = current_theme.get("primary", "#89b4fa")
+        txt = current_theme.get("text", "#cdd6f4")
+        d = current_theme.get("dim", "#9399b2")
+
+        total = len(items)
+        half = self.max_visible // 2
+        start_idx = max(0, min(self.selected_index - half, total - self.max_visible))
+        end_idx = min(start_idx + self.max_visible, total)
+
+        lines = []
+        is_arg_mode = (" " in text)
+        for i in range(start_idx, end_idx):
+            item = items[i]
+            is_sel = (i == self.selected_index)
+            prefix = "  → " if is_sel else "    "
+            col_w = 14 if not is_arg_mode else 20
+            lbl = html.escape(f"{item['cmd']:<{col_w}}")
+            desc = html.escape(item.get("desc", ""))
+            if is_sel:
+                lines.append(f'<style fg="{p}"><b>{prefix}{lbl}</b></style> <style fg="{txt}">{desc}</style>')
+            else:
+                lines.append(f'<style fg="{d}">{prefix}{lbl} {desc}</style>')
+
+        if total > self.max_visible:
+            lines.append(f'<style fg="{d}">    ({self.selected_index + 1}/{total})</style>')
+
+        return "\n".join(lines)
+
+
 class AgentCliApp:
     def __init__(self):
         self.config = Config()
@@ -113,19 +227,13 @@ class AgentCliApp:
         self.theme_id = self.config.get_settings().get("theme", "catppuccin")
         self.theme = get_theme(self.theme_id)
 
-        self._tab_cycle_state = None
+        self.select_list = PiSelectList(max_visible=5)
         self._last_sigint_time = 0.0
 
         self._init_prompt_session()
 
     def _render_bottom_toolbar(self):
         try:
-            cmd_col = self.theme.get("annotation_cmd", "#4bd1e0")
-            desc_col = self.theme.get("annotation_desc", "#70d6e3")
-            dim_col = self.theme.get("dim", "#9399b2")
-            err_col = self.theme.get("error", "#f38ba8")
-
-            # Check current text in prompt buffer
             curr_text = ""
             if self.session_prompt and hasattr(self.session_prompt, "default_buffer"):
                 curr_text = self.session_prompt.default_buffer.text
@@ -138,153 +246,50 @@ class AgentCliApp:
                 except Exception:
                     pass
 
-            curr_text = (curr_text or "").strip()
+            curr_text = (curr_text or "").lstrip()
 
-            # If user is typing a slash command, show the clean Codex-style annotation line
+            # 1. When typing slash command, render Pi SelectList inline directly beneath the prompt
             if curr_text.startswith("/"):
-                parts = curr_text.split(maxsplit=1)
-                raw_cmd = parts[0].lower()
-
-                # If user typed command and space (e.g. "/model ")
-                if " " in curr_text:
-                    matched_item = next((item for item in COMMAND_REGISTRY if item["cmd"].lower() == raw_cmd), None)
-                    if matched_item:
-                        usage = matched_item.get("usage", "")
-                        usage_str = f" <style fg='{dim_col}'>{usage}</style>" if usage else ""
-                        return HTML(
-                            f'<style fg="{cmd_col}"><b>{matched_item["cmd"]}</b></style>   '
-                            f'<style fg="{desc_col}">{matched_item["desc"]}</style>'
-                            f'{usage_str}'
-                        )
-
-                # Match prefix (e.g. "/serv", "/ser", "/s", "/")
-                matches = [item for item in COMMAND_REGISTRY if item["cmd"].lower().startswith(raw_cmd)]
-                if not matches:
-                    matches = [item for item in COMMAND_REGISTRY if raw_cmd in item["cmd"].lower()]
-
-                if matches:
-                    top = matches[0]
-                    if self._tab_cycle_state and self._tab_cycle_state.get("type") == "cmd":
-                        idx = self._tab_cycle_state.get("index", 0)
-                        if idx < len(matches):
-                            top = matches[idx]
-
-                    hint = ""
-                    if len(matches) > 1:
-                        hint = f"   <style fg='{dim_col}'>([Tab] 切换候选 · 共 {len(matches)} 项)</style>"
-                    elif raw_cmd == "/":
-                        hint = f"   <style fg='{dim_col}'>([Tab] 顺序切换 · 共 {len(matches)} 项)</style>"
-
-                    return HTML(
-                        f'<style fg="{cmd_col}"><b>{top["cmd"]}</b></style>   '
-                        f'<style fg="{desc_col}">{top["desc"]}</style>'
-                        f'{hint}'
-                    )
+                rendered_list = self.select_list.render(curr_text, self.theme, self.config, self.session_mgr)
+                if rendered_list:
+                    return HTML(rendered_list)
                 else:
+                    parts = curr_text.split(maxsplit=1)
+                    raw_cmd = html.escape(parts[0].lower())
+                    err_col = self.theme.get("error", "#f38ba8")
                     return HTML(f'<style fg="{err_col}">未知命令: {raw_cmd} (输入 /help 查看命令列表)</style>')
 
-            # Normal status bar when not typing slash command
+            # 2. When idle/typing normal prompt, render Pi clean status footer
             session = self._get_active_session()
             p = self.theme["primary"]
             s = self.theme["success"]
             d = self.theme["dim"]
             a = self.theme["accent"]
+            proxy = self.config.get_proxy()
+            proxy_str = html.escape(f"proxy: {proxy}" if proxy else "direct")
+
             if session:
-                srv = session.name
+                srv = html.escape(session.name)
                 rdir = session.remote_dir or "/"
                 if len(rdir) > 26:
                     rdir = "..." + rdir[-23:]
-                agent = session.command or "agy"
-                model = getattr(session, "model", "") or self.config.get_model(agent)
+                rdir = html.escape(rdir)
+                agent = html.escape(session.command or "agy")
+                model = html.escape(getattr(session, "model", "") or self.config.get_model(agent))
+                effort = html.escape(str(self.config.get_thinking_effort()))
                 return HTML(
                     f'<style fg="{s}">● {srv}</style> '
                     f'<style fg="{d}">│</style> '
                     f'<style fg="{p}">📁 {rdir}</style> '
                     f'<style fg="{d}">│</style> '
-                    f'<style fg="{a}">🤖 {agent}:{model}</style> '
-                    f'<style fg="{d}">│ [Tab] 命令提示</style>'
+                    f'<style fg="{a}">🤖 {agent}:{model} (effort: {effort})</style> '
+                    f'<style fg="{d}">│ {proxy_str} │ [Tab] /help</style>'
                 )
-            proxy = self.config.get_proxy()
-            proxy_tag = f"proxy: {proxy}" if proxy else "direct"
             return HTML(
-                f'<style fg="{d}">● idle │ 输入 /server 连接目标环境 │ {proxy_tag} │ [Tab] 命令提示</style>'
+                f'<style fg="{d}">● idle │ 输入 /server 连接目标环境 │ {proxy_str} │ [Tab] /help</style>'
             )
         except Exception:
             return HTML('<style fg="#9399b2">Argos Agent Orchestrator</style>')
-
-    def _cycle_tab_completion(self, buf, backward=False):
-        text = buf.text
-        if not text.startswith("/"):
-            return False
-
-        is_cycling_cmd = (self._tab_cycle_state and self._tab_cycle_state.get("type") == "cmd")
-        has_space = " " in text
-
-        # If user is typing arguments (after command and space)
-        if has_space and not is_cycling_cmd:
-            parts = text.split(maxsplit=1)
-            cmd = parts[0].lower()
-            arg = parts[1] if len(parts) > 1 else ""
-            arg_lower = arg.lower()
-
-            candidate_args = []
-            if cmd == "/model":
-                candidate_args = [m["label"] for m in POPULAR_MODELS]
-            elif cmd in ("/effort", "/thinking"):
-                candidate_args = ["high", "medium", "low", "off"]
-            elif cmd == "/theme":
-                candidate_args = [t["id"] for t in list_themes()]
-            elif cmd in ("/server", "/connect", "/c"):
-                candidate_args = [s.get("name", "") for s in self.config.get_servers() if s.get("name")]
-            elif cmd in ("/close", "/stop", "/switch", "/sw"):
-                candidate_args = [s.name for s in self.session_mgr.sessions.values()]
-
-            if candidate_args:
-                if (self._tab_cycle_state and self._tab_cycle_state.get("type") == "arg" and
-                        self._tab_cycle_state.get("cmd") == cmd and
-                        arg in self._tab_cycle_state.get("matches", [])):
-                    matches = self._tab_cycle_state["matches"]
-                    idx = (self._tab_cycle_state["index"] + (-1 if backward else 1)) % len(matches)
-                    chosen = matches[idx]
-                    self._tab_cycle_state["index"] = idx
-                else:
-                    matches = [a for a in candidate_args if a.lower().startswith(arg_lower)]
-                    if not matches:
-                        matches = [a for a in candidate_args if arg_lower in a.lower()]
-                    if not matches:
-                        return False
-                    idx = 0
-                    chosen = matches[0]
-                    self._tab_cycle_state = {"type": "arg", "cmd": cmd, "matches": matches, "index": 0}
-
-                new_text = f"{cmd} {chosen}"
-                buf.document = Document(new_text, cursor_position=len(new_text))
-                return True
-            return False
-
-        # Command completion
-        parts = text.split(maxsplit=1)
-        query = parts[0].strip().lower()
-        all_cmds = [item["cmd"] for item in COMMAND_REGISTRY]
-
-        if (self._tab_cycle_state and self._tab_cycle_state.get("type") == "cmd" and
-                query in self._tab_cycle_state.get("matches", [])):
-            matches = self._tab_cycle_state["matches"]
-            idx = (self._tab_cycle_state["index"] + (-1 if backward else 1)) % len(matches)
-            chosen = matches[idx]
-            self._tab_cycle_state["index"] = idx
-        else:
-            matches = [c for c in all_cmds if c.startswith(query)]
-            if not matches:
-                matches = [c for c in all_cmds if query in c]
-            if not matches:
-                return False
-            idx = 0
-            chosen = matches[0]
-            self._tab_cycle_state = {"type": "cmd", "matches": matches, "index": 0}
-
-        buf.document = Document(chosen, cursor_position=len(chosen))
-        return True
 
     def _init_prompt_session(self):
         try:
@@ -301,34 +306,87 @@ class AgentCliApp:
 
         bindings = KeyBindings()
 
+        @bindings.add("down")
+        def _(event):
+            buf = event.current_buffer
+            items = self.select_list.get_items(buf.text, self.config, self.session_mgr)
+            if items:
+                self.select_list.move_down(len(items))
+            else:
+                buf.auto_down()
+
+        @bindings.add("up")
+        def _(event):
+            buf = event.current_buffer
+            items = self.select_list.get_items(buf.text, self.config, self.session_mgr)
+            if items:
+                self.select_list.move_up(len(items))
+            else:
+                buf.auto_up()
+
         @bindings.add("tab")
         def _(event):
             buf = event.current_buffer
-            if not self._cycle_tab_completion(buf, backward=False):
+            items = self.select_list.get_items(buf.text, self.config, self.session_mgr)
+            if items:
+                selected = self.select_list.get_selected(buf.text, self.config, self.session_mgr)
+                if selected:
+                    if " " in buf.text:
+                        cmd = buf.text.split(maxsplit=1)[0]
+                        new_text = f"{cmd} {selected['cmd']}"
+                    else:
+                        new_text = f"{selected['cmd']} "
+                    buf.document = Document(new_text, cursor_position=len(new_text))
+                    self.select_list.selected_index = 0
+            else:
                 buf.insert_text("  ")
 
-        @bindings.add("s-tab")
+        @bindings.add("enter")
         def _(event):
             buf = event.current_buffer
-            self._cycle_tab_completion(buf, backward=True)
+            text = buf.text.strip()
+            exact_cmds = [item["cmd"] for item in COMMAND_REGISTRY]
+            if text.startswith("/"):
+                if not (" " in text):
+                    if text not in exact_cmds:
+                        selected = self.select_list.get_selected(buf.text, self.config, self.session_mgr)
+                        if selected:
+                            new_text = f"{selected['cmd']} "
+                            buf.document = Document(new_text, cursor_position=len(new_text))
+                            self.select_list.selected_index = 0
+                            return
+                else:
+                    parts = text.split(maxsplit=1)
+                    cmd = parts[0].lower()
+                    arg = parts[1] if len(parts) > 1 else ""
+                    items = self.select_list.get_items(buf.text, self.config, self.session_mgr)
+                    exact_args = [item["cmd"] for item in items]
+                    if items and (self.select_list.selected_index > 0 or (arg and arg not in exact_args)):
+                        selected = self.select_list.get_selected(buf.text, self.config, self.session_mgr)
+                        if selected:
+                            new_text = f"{cmd} {selected['cmd']}"
+                            buf.document = Document(new_text, cursor_position=len(new_text))
+                            self.select_list.selected_index = 0
+                            return
+            buf.validate_and_handle()
 
         @bindings.add("backspace")
         def _(event):
             buf = event.current_buffer
             buf.delete_before_cursor(count=1)
-            self._tab_cycle_state = None
+            self.select_list.selected_index = 0
 
         @bindings.add("delete")
         def _(event):
             buf = event.current_buffer
             buf.delete(count=1)
-            self._tab_cycle_state = None
+            self.select_list.selected_index = 0
 
         @bindings.add("escape")
         def _(event):
             buf = event.current_buffer
             buf.text = ""
-            self._tab_cycle_state = None
+            self.select_list.selected_index = 0
 
         try:
             self.session_prompt = PromptSession(

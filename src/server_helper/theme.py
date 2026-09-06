@@ -162,14 +162,13 @@ def get_prompt_toolkit_style(theme):
     s = theme["success"]
     d = theme["dim"]
     txt = theme.get("text", "#ffffff")
-    tb_bg = theme.get("toolbar_bg", "#282c34")
     return Style.from_dict({
         "prompt": f"{p} bold",
         "badge": f"{s} bold",
         "dim": f"{d}",
         "accent": f"{a}",
-        "bottom-toolbar": f"bg:{tb_bg} fg:{txt}",
-        "bottom-toolbar.text": f"bg:{tb_bg} fg:{txt}",
+        "bottom-toolbar": "default",
+        "bottom-toolbar.text": "default",
     })
 
 
