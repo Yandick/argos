@@ -1,0 +1,141 @@
+"""
+Configuration Manager for ServerHelper
+Loads settings from setting.json (current dir or ~/.server-helper/setting.json)
+"""
+import os
+import json
+import uuid
+
+DEFAULT_CONFIG = {
+    "servers": [],
+    "agents": {
+        "default": "claude",
+        "claude": {
+            "name": "Claude Code",
+            "cmd": "claude",
+            "type": "cli"
+        },
+        "agy": {
+            "name": "Antigravity CLI",
+            "cmd": "agy",
+            "type": "cli"
+        },
+        "codex": {
+            "name": "OpenAI / Codex API",
+            "api_base": "https://api.deepseek.com/v1",
+            "api_key": "",
+            "model": "deepseek-chat",
+            "type": "api"
+        }
+    },
+    "settings": {
+        "theme": "dark",
+        "default_agent": "claude"
+    }
+}
+
+
+class Config:
+    def __init__(self, config_path=None):
+        self.config_path = self._resolve_path(config_path)
+        self.data = self._load()
+
+    def _resolve_path(self, custom_path=None):
+        if custom_path and os.path.exists(custom_path):
+            return os.path.abspath(custom_path)
+        # Check current working directory for setting.json
+        local_file = os.path.join(os.getcwd(), "setting.json")
+        if os.path.isfile(local_file):
+            return local_file
+        # Fallback to home dir
+        home_dir = os.path.expanduser(os.environ.get("SERVER_HELPER_HOME", "~/.server-helper"))
+        os.makedirs(home_dir, exist_ok=True)
+        return os.path.join(home_dir, "setting.json")
+
+    def _load(self):
+        if not os.path.exists(self.config_path):
+            self._save(DEFAULT_CONFIG)
+            return DEFAULT_CONFIG
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for k, v in DEFAULT_CONFIG.items():
+                    if k not in data:
+                        data[k] = v
+                return data
+        except Exception:
+            return DEFAULT_CONFIG
+
+    def _save(self, data=None):
+        if data is None:
+            data = self.data
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[Config] 保存配置失败: {e}")
+
+    def get_servers(self):
+        return self.data.get("servers", [])
+
+    def get_server(self, name_or_id):
+        for s in self.data.get("servers", []):
+            if s.get("id") == name_or_id or s.get("name") == name_or_id:
+                return s
+        return None
+
+    def add_or_update_server(self, name, host, port=22, user="root", auth_type="key", key_path=None, password=None, default_dir=None):
+        servers = self.data.get("servers", [])
+        existing = self.get_server(name)
+        if existing:
+            existing.update({
+                "host": host,
+                "port": int(port),
+                "user": user,
+                "auth_type": auth_type,
+                "key_path": key_path,
+                "password": password,
+                "default_dir": default_dir
+            })
+            res = existing
+        else:
+            server_id = "srv-" + str(uuid.uuid4())[:8]
+            res = {
+                "id": server_id,
+                "name": name,
+                "host": host,
+                "port": int(port),
+                "user": user,
+                "auth_type": auth_type,
+                "key_path": key_path or os.path.expanduser("~/.ssh/id_rsa"),
+                "password": password or "",
+                "default_dir": default_dir or ""
+            }
+            servers.append(res)
+        self.data["servers"] = servers
+        self._save()
+        return res
+
+    def remove_server(self, name_or_id):
+        servers = self.data.get("servers", [])
+        new_servers = [s for s in servers if s.get("id") != name_or_id and s.get("name") != name_or_id]
+        if len(new_servers) != len(servers):
+            self.data["servers"] = new_servers
+            self._save()
+            return True
+        return False
+
+    def get_agents(self):
+        return self.data.get("agents", {})
+
+    def get_agent(self, name):
+        agents = self.get_agents()
+        return agents.get(name) or agents.get("claude")
+
+    def get_settings(self):
+        return self.data.get("settings", {})
+
+    def update_settings(self, new_settings):
+        self.data["settings"].update(new_settings)
+        self._save()
+        return self.data["settings"]

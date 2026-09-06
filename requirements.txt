@@ -1,0 +1,4 @@
+tornado>=6.4.0
+paramiko>=3.4.0
+pywinpty>=2.0.10
+psutil>=5.9.0
