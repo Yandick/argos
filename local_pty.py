@@ -62,9 +62,9 @@ class LocalPtySession:
 
         # If user asked for agy
         if cmd == "agy" or cmd.startswith("agy "):
-            agy_cmd = shutil.which("agy.exe") or os.path.expanduser(r"~\AppData\Local\agy\bin\agy.exe")
-            if os.path.exists(agy_cmd):
-                return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{agy_cmd}\' {cmd[3:]}"'
+            agy_cmd = shutil.which("agy.exe") or shutil.which("agy") or os.path.expanduser(r"~\AppData\Local\agy\bin\agy.exe")
+            if agy_cmd and os.path.exists(agy_cmd):
+                return f'"{agy_cmd}" {cmd[3:]}'.strip()
             return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
 
         # Default shell if empty or powershell

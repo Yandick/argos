@@ -259,25 +259,30 @@ class AgentCliApp:
 
         # List servers like /model in coding agents
         self._print_servers_table(servers)
-        console.print(f"[dim]快捷操作: [bold yellow][1-{len(servers)}][/bold yellow] 选择连接 | [bold green][a][/bold green] 添加新服务器 | [bold red][d][/bold red] 删除服务器 | [bold][q][/bold] 退出[/dim]\n")
+        console.print(f"[dim]快捷操作: [bold yellow][0][/bold yellow] 本地任务 | [bold yellow][1-{len(servers)}][/bold yellow] 远程连接 | [bold green][a][/bold green] 添加新服务器 | [bold red][d][/bold red] 删除服务器 | [bold][q][/bold] 退出[/dim]\n")
 
         if not is_interactive:
             return
 
         selected_server = None
         if arg:
-            try:
-                idx = int(arg) - 1
-                if 0 <= idx < len(servers):
-                    selected_server = servers[idx]
-            except ValueError:
-                selected_server = self.config.get_server(arg)
+            if arg == "0":
+                selected_server = {"is_local": True, "name": "local-machine", "default_dir": os.getcwd()}
+            else:
+                try:
+                    idx = int(arg) - 1
+                    if 0 <= idx < len(servers):
+                        selected_server = servers[idx]
+                except ValueError:
+                    selected_server = self.config.get_server(arg)
 
         if not selected_server:
             try:
-                choice = input("👉 请输入服务器编号或操作 [1]: ").strip() or "1"
+                choice = input("👉 请输入编号或操作 [0]: ").strip() or "0"
                 if choice.lower() in ("q", "quit", "cancel"):
                     return
+                elif choice == "0":
+                    selected_server = {"is_local": True, "name": "local-machine", "default_dir": os.getcwd()}
                 elif choice.lower() in ("a", "add"):
                     new_srv = self._prompt_new_server()
                     if new_srv:
@@ -308,13 +313,22 @@ class AgentCliApp:
         self._connect_to_server(selected_server)
 
     def _print_servers_table(self, servers):
-        table = Table(title="🖥️ 已配置的远程服务器 (类似 /model 列表)", border_style="blue")
+        table = Table(title="🖥️ 可用服务器与环境列表 (类似 /model 列表)", border_style="blue")
         table.add_column("编号", justify="center", style="bold yellow")
-        table.add_column("服务器名称", style="bold cyan")
-        table.add_column("连接地址", style="white")
+        table.add_column("环境 / 服务器名称", style="bold cyan")
+        table.add_column("连接地址 / 类型", style="white")
         table.add_column("用户名", style="magenta")
         table.add_column("认证方式", style="yellow")
         table.add_column("默认工作目录", style="white")
+
+        table.add_row(
+            "[0]",
+            "本地开发机 (Local Machine)",
+            "本机原生 PTY",
+            os.getenv("USERNAME", "local"),
+            "本地免密",
+            os.getcwd()
+        )
 
         for idx, s in enumerate(servers, 1):
             auth_desc = "私钥" if s.get("auth_type") == "key" else "密码"
@@ -329,60 +343,82 @@ class AgentCliApp:
         console.print(table)
 
     def _connect_to_server(self, server_info):
-        console.print(Panel(
-            f"目标服务器: [bold cyan]{server_info.get('name')}[/bold cyan] ({server_info.get('user')}@{server_info.get('host')}:{server_info.get('port', 22)})\n"
-            f"认证方式: [yellow]{'私钥' if server_info.get('auth_type') == 'key' else '密码'}[/yellow]",
-            title="🔗 准备建立连接",
-            border_style="cyan"
-        ))
+        is_local = server_info.get("is_local", False)
 
-        # 1. Directory selection
-        default_dir = server_info.get("default_dir") or "/workspace"
-        console.print(f"[bold]📁 请选择或输入远程工作目录:[/bold]")
-        console.print(f"   [dim]直接回车使用默认目录: [bold green]{default_dir}[/bold green]，或输入自定义目录 (如 /data/rec 或 /workspace/safety)[/dim]")
-        try:
-            remote_dir = input(f"远程工作目录 [{default_dir}]: ").strip() or default_dir
-        except (KeyboardInterrupt, EOFError):
-            console.print("[yellow]已取消连接。[/yellow]")
-            return
+        if is_local:
+            console.print(Panel(
+                "目标环境: [bold cyan]本地开发机 (Local Machine)[/bold cyan]\n"
+                "运行模式: [green]本机原生 PTY (支持直接接入 agy / claude / powershell)[/green]",
+                title="🔗 准备启动本地任务",
+                border_style="cyan"
+            ))
+            default_dir = server_info.get("default_dir") or os.getcwd()
+            console.print(f"[bold]📁 请选择或输入本地工作目录:[/bold]")
+            console.print(f"   [dim]直接回车使用当前目录: [bold green]{default_dir}[/bold green][/dim]")
+            try:
+                work_dir = input(f"本地工作目录 [{default_dir}]: ").strip() or default_dir
+            except (KeyboardInterrupt, EOFError):
+                console.print("[yellow]已取消。[/yellow]")
+                return
+        else:
+            console.print(Panel(
+                f"目标服务器: [bold cyan]{server_info.get('name')}[/bold cyan] ({server_info.get('user')}@{server_info.get('host')}:{server_info.get('port', 22)})\n"
+                f"认证方式: [yellow]{'私钥' if server_info.get('auth_type') == 'key' else '密码'}[/yellow]",
+                title="🔗 准备建立连接",
+                border_style="cyan"
+            ))
+            default_dir = server_info.get("default_dir") or "/workspace"
+            console.print(f"[bold]📁 请选择或输入远程工作目录:[/bold]")
+            console.print(f"   [dim]直接回车使用默认目录: [bold green]{default_dir}[/bold green]，或输入自定义目录 (如 /data/rec 或 /workspace/safety)[/dim]")
+            try:
+                work_dir = input(f"远程工作目录 [{default_dir}]: ").strip() or default_dir
+            except (KeyboardInterrupt, EOFError):
+                console.print("[yellow]已取消连接。[/yellow]")
+                return
 
         # 2. Agent selection
-        agents = self.config.get_agents()
         default_agent = self.config.get_settings().get("default_agent", "claude")
         console.print(f"\n[bold]🤖 请选择挂载的 Agent 引擎:[/bold]")
-        console.print(f"  [1] [bold magenta]Claude Code[/bold magenta] (claude) - 推荐")
+        console.print(f"  [1] [bold magenta]Claude Code[/bold magenta] (claude)")
         console.print(f"  [2] [bold magenta]Antigravity CLI[/bold magenta] (agy)")
         console.print(f"  [3] [bold magenta]Codex / LLM API[/bold magenta] (基于 DeepSeek/OpenAI 自主工具循环)")
         console.print(f"  [4] 原生终端 (shell / bash)")
 
         try:
-            agent_pick = input("选择 Agent [1]: ").strip() or "1"
+            agent_pick = input("选择 Agent [2]: ").strip() or "2"
         except (KeyboardInterrupt, EOFError):
-            console.print("[yellow]已取消连接。[/yellow]")
+            console.print("[yellow]已取消。[/yellow]")
             return
         agent_map = {"1": "claude", "2": "agy", "3": "codex", "4": "shell"}
-        agent_type = agent_map.get(agent_pick, "claude")
+        agent_type = agent_map.get(agent_pick, "agy")
 
         # 3. Task Name
-        dir_name = os.path.basename(remote_dir.rstrip("/\\")) or "task"
+        dir_name = os.path.basename(work_dir.rstrip("/\\")) or "task"
         try:
             task_name = input(f"\n🏷️ 任务标识名称 [{dir_name}]: ").strip() or dir_name
         except (KeyboardInterrupt, EOFError):
             task_name = dir_name
 
-        console.print(f"\n[cyan]正在连接 {server_info.get('host')} 并启动任务 [{task_name}]...[/cyan]")
+        console.print(f"\n[cyan]正在初始化任务 [{task_name}] (Agent: {agent_type})...[/cyan]")
 
-        # Sync server info to daemon
-        api_post("/api/config/server", server_info)
-
-        # Launch session
-        payload = {
-            "name": task_name,
-            "session_type": "remote_ssh",
-            "server_id": server_info.get("id"),
-            "remote_dir": remote_dir,
-            "startup_cmd": agent_type if agent_type != "shell" else ""
-        }
+        if is_local:
+            payload = {
+                "name": task_name,
+                "session_type": "local_pty",
+                "remote_dir": work_dir,
+                "cwd": work_dir,
+                "startup_cmd": agent_type if agent_type != "shell" else ""
+            }
+        else:
+            # Sync server info to daemon
+            api_post("/api/config/server", server_info)
+            payload = {
+                "name": task_name,
+                "session_type": "remote_ssh",
+                "server_id": server_info.get("id"),
+                "remote_dir": work_dir,
+                "startup_cmd": agent_type if agent_type != "shell" else ""
+            }
 
         res = api_post("/api/sessions", payload)
         if not res.get("success"):
