@@ -201,6 +201,9 @@ def interactive_menu_select(title, items, current_idx=0, extra_shortcuts=None, t
             start = max(0, min(selected_idx - half, total - max_visible))
             end = min(start + max_visible, total)
 
+            visible_items = items[start:end]
+            col_w = max((len(str(it.get("label", it))) for it in visible_items), default=12) + 2
+
             for idx in range(start, end):
                 item = items[idx]
                 is_selected = (idx == selected_idx)
@@ -209,11 +212,13 @@ def interactive_menu_select(title, items, current_idx=0, extra_shortcuts=None, t
                 desc = item.get("desc", "")
                 badge = item.get("badge", "")
 
-                label_fmt = f"[{p}][bold]{label}[/bold][/{p}]" if is_selected else f"[{txt}]{label}[/{txt}]"
-                desc_fmt = f" [{d}]{desc}[/{d}]" if desc else ""
-                badge_fmt = f" [{s}]{badge}[/{s}]" if badge else ""
+                lbl_padded = f"{label:<{col_w}}"
+                label_fmt = f"[{p}][bold]{lbl_padded}[/bold][/{p}]" if is_selected else f"[{txt}]{lbl_padded}[/{txt}]"
+                desc_fmt = f"[{d}]{desc:<32}[/{d}]" if desc else ""
+                badge_col = s if item.get("installed", True) else d
+                badge_fmt = f" [{badge_col}]{badge}[/{badge_col}]" if badge else ""
 
-                console.print(f"{marker}{label_fmt}{desc_fmt}{badge_fmt}")
+                console.print(f"{marker}{label_fmt} {desc_fmt}{badge_fmt}")
 
             if total > max_visible:
                 console.print(f"  [{d}]({selected_idx + 1}/{total})[/{d}]")

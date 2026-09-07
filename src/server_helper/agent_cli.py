@@ -51,6 +51,13 @@ if _ROOT not in sys.path:
 from server_helper.config import Config
 from server_helper.theme import get_theme, list_themes, render_swatch, get_prompt_toolkit_style
 from server_helper.ui_picker import interactive_theme_picker, interactive_menu_select
+from server_helper.agent_detector import (
+    detect_local_agents,
+    get_installed_agents,
+    get_agent_info,
+    is_agent_installed,
+    build_startup_command
+)
 from server_helper import i18n
 from server_helper.i18n import t as _t
 from session_manager import SessionManager
@@ -59,21 +66,22 @@ console = Console()
 
 COMMAND_REGISTRY = [
     {"cmd": "/server",    "cat": "Remote", "desc_key": "cmd.server", "usage": "[scut-gpu|add|rename|rm]"},
-    {"cmd": "/files",     "cat": "Remote", "desc_key": "cmd.files", "usage": "[path]"},
-    {"cmd": "/sh",        "cat": "Remote", "desc_key": "cmd.sh", "usage": ""},
-    {"cmd": "/model",     "cat": "Agent",  "desc_key": "cmd.model", "usage": "[gemini-3.8-flash|claude-3-7-sonnet|...]"},
+    {"cmd": "/agent",     "cat": "Agent",  "desc_key": "cmd.agent",  "usage": "[agy|claude|opencode|codex]"},
+    {"cmd": "/model",     "cat": "Agent",  "desc_key": "cmd.model",  "usage": "[gemini-3.8-flash|claude-3-7-sonnet|...]"},
     {"cmd": "/effort",    "cat": "Agent",  "desc_key": "cmd.effort", "usage": "[high|medium|low|off]"},
-    {"cmd": "/proxy",     "cat": "System", "desc_key": "cmd.proxy", "usage": "[http://127.0.0.1:7897|off]"},
-    {"cmd": "/tasks",     "cat": "Tasks",  "desc_key": "cmd.tasks", "usage": ""},
+    {"cmd": "/files",     "cat": "Remote", "desc_key": "cmd.files",  "usage": "[path]"},
+    {"cmd": "/sh",        "cat": "Remote", "desc_key": "cmd.sh",     "usage": ""},
+    {"cmd": "/proxy",     "cat": "System", "desc_key": "cmd.proxy",  "usage": "[http://127.0.0.1:7897|off]"},
+    {"cmd": "/tasks",     "cat": "Tasks",  "desc_key": "cmd.tasks",  "usage": ""},
     {"cmd": "/switch",    "cat": "Tasks",  "desc_key": "cmd.switch", "usage": "[name]"},
     {"cmd": "/broadcast", "cat": "Remote", "desc_key": "cmd.broadcast", "usage": "<shell cmd>"},
     {"cmd": "/status",    "cat": "System", "desc_key": "cmd.status", "usage": ""},
-    {"cmd": "/theme",     "cat": "System", "desc_key": "cmd.theme", "usage": "[name]"},
-    {"cmd": "/lang",      "cat": "System", "desc_key": "cmd.lang", "usage": "[en|zh]"},
+    {"cmd": "/theme",     "cat": "System", "desc_key": "cmd.theme",  "usage": "[name]"},
+    {"cmd": "/lang",      "cat": "System", "desc_key": "cmd.lang",   "usage": "[en|zh]"},
     {"cmd": "/config",    "cat": "System", "desc_key": "cmd.config", "usage": ""},
-    {"cmd": "/clear",     "cat": "System", "desc_key": "cmd.clear", "usage": ""},
-    {"cmd": "/help",      "cat": "System", "desc_key": "cmd.help", "usage": ""},
-    {"cmd": "/exit",      "cat": "System", "desc_key": "cmd.exit", "usage": ""},
+    {"cmd": "/clear",     "cat": "System", "desc_key": "cmd.clear",  "usage": ""},
+    {"cmd": "/help",      "cat": "System", "desc_key": "cmd.help",   "usage": ""},
+    {"cmd": "/exit",      "cat": "System", "desc_key": "cmd.exit",   "usage": ""},
 ]
 
 
@@ -134,7 +142,13 @@ class PiSelectList:
         arg_lower = arg.lower()
 
         if " " in text:
-            if raw_cmd == "/model":
+            if raw_cmd == "/agent":
+                detected = detect_local_agents()
+                candidates = [
+                    {"cmd": a["id"], "desc": f"{a['name']} ({a['badge']})"}
+                    for a in detected
+                ]
+            elif raw_cmd == "/model":
                 candidates = [{"cmd": m["label"], "desc": m["desc"]} for m in POPULAR_MODELS]
             elif raw_cmd in ("/effort", "/thinking"):
                 candidates = [
@@ -241,6 +255,14 @@ class AgentCliApp:
         self.active_session_id = None
         self.history_file = os.path.expanduser("~/.server-helper/cli_history")
         os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+
+        # Auto-detect local agents and validate default agent
+        self.local_agents = detect_local_agents()
+        default_agent = self.config.get_settings().get("default_agent")
+        if not default_agent or not is_agent_installed(default_agent):
+            installed = [a["id"] for a in self.local_agents if a["installed"] and a["id"] != "shell"]
+            if installed:
+                self.config.update_settings({"default_agent": installed[0]})
 
         # Load active theme
         self.theme_id = self.config.get_settings().get("theme", "catppuccin")
@@ -448,16 +470,21 @@ class AgentCliApp:
         swatch = render_swatch(self.theme)
 
         session = self._get_active_session()
+        active_agent = (session.command if session else None) or self.config.get_settings().get("default_agent", "agy")
+        ag_info = get_agent_info(active_agent)
+        ver_badge = f" ({ag_info['version']})" if ag_info and ag_info.get("version") else ""
+        model_name = getattr(session, "model", "") if session else self.config.get_model(active_agent)
+
         if session:
             srv_info = session.server_info or {}
             srv_str = f"{session.name} ({srv_info.get('user', 'root')}@{srv_info.get('host', 'local')}:{srv_info.get('port', 22)})"
             rdir = session.remote_dir or "/"
-            agent_str = f"{session.command or 'agy'} · {session.model or self.config.get_model()}"
+            agent_str = f"{active_agent}{ver_badge} · {model_name}"
             status_tag = f"[{s}]● {_t('banner.running')}[/{s}]"
         else:
             srv_str = _t('banner.notConnected')
             rdir = "/"
-            agent_str = f"{self.config.get_settings().get('default_agent', 'agy')} · {self.config.get_model()}"
+            agent_str = f"{active_agent}{ver_badge} · {model_name}"
             status_tag = f"[{d}]{_t('banner.idle')}[/{d}]"
 
         effort = self.config.get_thinking_effort()
@@ -483,9 +510,10 @@ class AgentCliApp:
         # Compact shortcuts
         shortcuts = (
             f"[{d}]/[/{d}][{a}]server[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]agent[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]model[/{a}] [{d}]·[/{d}] "
             f"[{d}]/[/{d}][{a}]files[/{a}] [{d}]·[/{d}] "
             f"[{d}]/[/{d}][{a}]sh[/{a}] [{d}]·[/{d}] "
-            f"[{d}]/[/{d}][{a}]model[/{a}] [{d}]·[/{d}] "
             f"[{d}]/[/{d}][{a}]theme[/{a}] [{d}]·[/{d}] "
             f"[{d}]/[/{d}][{a}]help[/{a}]"
         )
@@ -669,7 +697,6 @@ class AgentCliApp:
 
         # Also include aliases not in registry
         extra_cmds = [
-            {"cmd": "/agent", "cat": "Agent", "desc_key": "help.agent", "usage": "<name>"},
             {"cmd": "/close", "cat": "Tasks", "desc_key": "help.close", "usage": "[name|#]"},
         ]
         for item in extra_cmds:
@@ -1006,18 +1033,9 @@ class AgentCliApp:
         task_name = server_info.get("name") or (os.path.basename(work_dir.rstrip("/\\")) or "task")
 
         # Build startup command with model and effort flags
-        startup_cmd = ""
         model_name = self.config.get_model(agent_type)
         effort_level = self.config.get_thinking_effort()
-
-        if agent_type == "agy":
-            startup_cmd = f"agy --model {model_name} --effort {effort_level}"
-        elif agent_type == "claude":
-            startup_cmd = f"claude --model {model_name}" if model_name else "claude"
-        elif agent_type == "codex":
-            startup_cmd = ""
-        elif agent_type == "shell":
-            startup_cmd = ""
+        startup_cmd = build_startup_command(agent_type, model=model_name, effort=effort_level)
 
         cols, rows = shutil.get_terminal_size((120, 30))
 
@@ -1357,17 +1375,70 @@ class AgentCliApp:
                 session.output_listeners.remove(on_term_output)
             console.print("\n[dim]● [Detached from session][/dim]\n")
 
-    def action_set_agent(self, agent_name):
-        if not agent_name:
-            console.print("[dim]Supported agents: agy, claude, codex, shell[/dim]")
-            return
+    def action_set_agent(self, agent_name=""):
+        agent_name = (agent_name or "").strip().lower()
         session = self._get_active_session()
+        curr_agent = (session.command if session else None) or self.config.get_settings().get("default_agent", "agy")
+
+        detected = detect_local_agents(force_refresh=True)
+
+        # Interactive arrow-key selection if no agent_name provided
+        if not agent_name:
+            items = []
+            selected_idx = 0
+            for idx, a in enumerate(detected):
+                is_active = (a["id"] == curr_agent)
+                if is_active:
+                    selected_idx = idx
+
+                status_badge = (f"● {a['badge']}" if a["installed"] else "not found")
+                if is_active:
+                    status_badge += " (active)"
+
+                items.append({
+                    "id": a["id"],
+                    "label": a["id"],
+                    "desc": a["desc"],
+                    "badge": status_badge,
+                    "installed": a["installed"],
+                    "path": a.get("path"),
+                    "version": a.get("version"),
+                })
+
+            action, chosen, _ = interactive_menu_select(
+                title=_t("agent.title"),
+                items=items,
+                current_idx=selected_idx,
+                theme=self.theme
+            )
+
+            if action == "select" and chosen:
+                agent_name = chosen["id"]
+            else:
+                console.clear()
+                console.print(self.render_header())
+                return
+
+        # Validate agent
+        info = get_agent_info(agent_name)
+        if not info:
+            console.print(f"[{self.theme['warning']}]● Unknown agent: {agent_name}. Valid: agy, claude, opencode, codex, aider, goose, shell[/{self.theme['warning']}]\n")
+            return
+
+        if not info.get("installed") and agent_name != "shell":
+            console.print(f"[{self.theme['warning']}]● {_t('agent.notFound', name=agent_name)}[/{self.theme['warning']}]\n")
+            return
+
         if session:
             session.command = agent_name
-            console.print(f"[{self.theme['success']}]● Active session [{session.name}] agent set to: {agent_name}[/{self.theme['success']}]")
-        else:
-            self.config.update_settings({"default_agent": agent_name})
-            console.print(f"[{self.theme['success']}]● Default agent set to: {agent_name}[/{self.theme['success']}]")
+        self.config.update_settings({"default_agent": agent_name})
+
+        console.clear()
+        console.print(self.render_header())
+        ver_tag = f" ({info['version']})" if info.get("version") else ""
+        path_tag = f" [{self.theme['dim']}]{info.get('path', '')}[/{self.theme['dim']}]" if info.get('path') else ""
+        switched_label = f"[bold]{info['name']}{ver_tag}[/bold]"
+        console.print(f"[{self.theme['success']}]● {_t('agent.switched', name=switched_label)}{path_tag}[/{self.theme['success']}]\n")
 
     def action_show_status(self):
         session = self._get_active_session()

@@ -16,6 +16,7 @@ _STRINGS = {
         "cmd.server": "Switch or manage remote target servers",
         "cmd.files": "Browse workspace files & directory tree (zero tokens)",
         "cmd.sh": "Attach the full interactive terminal (Ctrl+] to return)",
+        "cmd.agent": "Detect & switch local AI agent engine (agy, claude, opencode...)",
         "cmd.model": "Switch the active LLM model",
         "cmd.effort": "Adjust reasoning effort (high/med/low/off)",
         "cmd.proxy": "Configure HTTP proxy & SSH reverse tunnel",
@@ -65,11 +66,19 @@ _STRINGS = {
         "banner.idle": "idle",
         "banner.effort": "effort",
         "sc.target": "target",
+        "sc.agent": "agent",
         "sc.files": "files",
         "sc.terminal": "terminal",
         "sc.models": "models",
         "sc.proxy": "proxy",
         "sc.help": "help",
+
+        # Agent command
+        "agent.title": "Select AI Agent Engine",
+        "agent.switched": "Agent engine switched to: {name}",
+        "agent.notFound": "Agent '{name}' was not found in system PATH. Please install it first.",
+        "agent.active": "active",
+        "agent.installed": "installed",
 
         # Bottom toolbar
         "toolbar.unknownCmd": "Unknown command: {cmd} (type /help for the command list)",
@@ -91,6 +100,7 @@ _STRINGS = {
         "cmd.server": "切换或管理远程目标服务器 (scut-gpu 等)",
         "cmd.files": "浏览工作区文件与目录树 (免耗 token)",
         "cmd.sh": "连接全功能交互式终端 (Ctrl+] 返回)",
+        "cmd.agent": "自动探测并切换本地已安装的 AI Agent (agy, claude, opencode...)",
         "cmd.model": "切换活跃 LLM 模型 (gemini-3.8-flash 等)",
         "cmd.effort": "调节思考推理深度 (high/med/low/off)",
         "cmd.proxy": "配置 HTTP 代理与 SSH 反向隧道 (10808/7897)",
@@ -138,11 +148,19 @@ _STRINGS = {
         "banner.idle": "空闲",
         "banner.effort": "深度",
         "sc.target": "目标",
+        "sc.agent": "引擎",
         "sc.files": "文件",
         "sc.terminal": "终端",
         "sc.models": "模型",
         "sc.proxy": "代理",
         "sc.help": "帮助",
+
+        # Agent command
+        "agent.title": "选择本地 AI Agent 引擎",
+        "agent.switched": "已将 Agent 引擎切换为: {name}",
+        "agent.notFound": "未在系统 PATH 中检测到 Agent '{name}'，请先安装。",
+        "agent.active": "当前生效",
+        "agent.installed": "已安装",
 
         "toolbar.unknownCmd": "未知命令: {cmd} (输入 /help 查看命令列表)",
         "toolbar.idleHint": "空闲 │ 输入 /server 连接目标环境 │ {proxy} │ [Tab] /help",
