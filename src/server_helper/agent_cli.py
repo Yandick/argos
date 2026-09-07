@@ -819,6 +819,14 @@ class AgentCliApp:
                 "installed": True
             })
 
+        # Add custom model manual entry option at the end
+        items.append({
+            "label": "[+] Custom Model...",
+            "desc": "Manually enter any model identifier not in the list",
+            "badge": "input",
+            "installed": True
+        })
+
         action, chosen_item, _ = interactive_menu_select(
             title=f"Select AI Model for [{agent}]",
             items=items,
@@ -826,7 +834,17 @@ class AgentCliApp:
             theme=self.theme
         )
         if action == "select" and chosen_item:
-            model_name = chosen_item["label"]
+            if chosen_item["label"] == "[+] Custom Model...":
+                console.print(f"\n  [{self.theme['accent']}]Enter custom model identifier:[/{self.theme['accent']}]")
+                custom_name = self._get_user_input("  › model: ")
+                if not custom_name:
+                    console.clear()
+                    console.print(self.render_header())
+                    return
+                model_name = custom_name
+            else:
+                model_name = chosen_item["label"]
+
             self.config.set_model(model_name, agent)
             if session:
                 session.model = model_name

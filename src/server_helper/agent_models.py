@@ -161,36 +161,102 @@ def load_claude_models():
     return configured_models if configured_models else list(DEFAULT_CLAUDE_MODELS)
 
 
+_CODEX_MODELS_CACHE = None
+
+
 def load_codex_models():
     """
-    Reads Codex models from ~/.codex/config.toml or ~/.codex/config.json.
+    Reads Codex models from ~/.codex/config.toml and ~/.codex/auth.json.
+    If a custom model_provider is configured with a base_url, queries
+    the provider's /models endpoint to discover live subscription models
+    (such as gpt-6-astra, gpt-5.6-terra, gpt-5.6-sol, etc.) with caching.
     """
+    global _CODEX_MODELS_CACHE
     home = _get_home()
     config_toml = os.path.join(home, ".codex", "config.toml")
-    models = []
-    seen = set()
+    auth_json = os.path.join(home, ".codex", "auth.json")
+
+    configured_model = None
+    provider_name = "custom"
+    base_url = None
 
     if os.path.isfile(config_toml):
         try:
             with open(config_toml, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
-            m = re.search(r'model\s*=\s*"([^"]+)"', content)
-            if m:
-                model_name = m.group(1).strip()
-                seen.add(model_name)
-                p_match = re.search(r'model_provider\s*=\s*"([^"]+)"', content)
-                prov = p_match.group(1) if p_match else "config.toml"
-                models.append({
-                    "cmd": model_name,
-                    "label": model_name,
-                    "name": model_name,
-                    "desc": f"Configured in ~/.codex/config.toml (provider: {prov})",
-                    "badge": "configured",
-                    "source": config_toml
-                })
+            m_mod = re.search(r'model\s*=\s*"([^"]+)"', content)
+            if m_mod:
+                configured_model = m_mod.group(1).strip()
+            m_prov = re.search(r'model_provider\s*=\s*"([^"]+)"', content)
+            if m_prov:
+                provider_name = m_prov.group(1).strip()
+            m_url = re.search(r'base_url\s*=\s*"([^"]+)"', content)
+            if m_url:
+                base_url = m_url.group(1).strip()
         except Exception:
             pass
 
+    api_key = None
+    if os.path.isfile(auth_json):
+        try:
+            with open(auth_json, "r", encoding="utf-8", errors="replace") as f:
+                auth_data = json.load(f)
+                api_key = auth_data.get("OPENAI_API_KEY") or auth_data.get("api_key")
+        except Exception:
+            pass
+
+    # Query live models from custom endpoint if base_url is available
+    live_models = []
+    if base_url:
+        if _CODEX_MODELS_CACHE is not None:
+            live_models = _CODEX_MODELS_CACHE
+        else:
+            try:
+                import requests
+                url = base_url.rstrip("/") + "/models"
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                resp = requests.get(url, headers=headers, timeout=2.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    items = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                    for item in items:
+                        mid = item.get("id") if isinstance(item, dict) else (item if isinstance(item, str) else None)
+                        if mid and mid not in live_models:
+                            live_models.append(mid)
+                    if live_models:
+                        _CODEX_MODELS_CACHE = live_models
+            except Exception:
+                pass
+
+    models = []
+    seen = set()
+
+    # 1. Active configured model from config.toml
+    if configured_model:
+        seen.add(configured_model)
+        models.append({
+            "cmd": configured_model,
+            "label": configured_model,
+            "name": configured_model,
+            "desc": f"Configured default in ~/.codex/config.toml ({provider_name})",
+            "badge": "configured",
+            "source": config_toml
+        })
+
+    # 2. Live models from provider subscription (e.g. gpt-6-astra, gpt-5.6-terra, gpt-5.6-luna)
+    for m in live_models:
+        if m not in seen:
+            seen.add(m)
+            models.append({
+                "cmd": m,
+                "label": m,
+                "name": m,
+                "desc": f"Custom subscription model ({provider_name})",
+                "badge": "subscription",
+                "source": base_url or "api"
+            })
+
+    # 3. Fallback standard models
     for m in DEFAULT_CODEX_MODELS:
         if m["cmd"] not in seen:
             item = dict(m)
