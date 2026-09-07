@@ -1,11 +1,11 @@
 """
 Argos Terminal UI Interactive Picker
-Provides smooth arrow-key navigation (↑/↓), live previews, and modal selections
-inspired by OpenCode, Pi, and Gum.
+Provides smooth arrow-key navigation, live previews, and modal selections.
+Inspired by OpenCode, Pi, and Gum selector patterns.
 """
 import sys
 import os
-import time
+import shutil
 
 if sys.platform == "win32":
     try:
@@ -22,10 +22,7 @@ console = Console()
 
 
 def read_single_key():
-    """
-    Reads a single keypress cross-platform.
-    Returns: 'up', 'down', 'left', 'right', 'enter', 'escape', 'backspace', or character.
-    """
+    """Reads a single keypress cross-platform."""
     if sys.platform == "win32":
         import msvcrt
         ch = msvcrt.getch()
@@ -95,16 +92,16 @@ def show_cursor():
     sys.stdout.flush()
 
 
-def clear_screen():
-    sys.stdout.write("\x1b[2J\x1b[H")
+def _reset_screen():
+    """Move cursor to top-left and clear from cursor down. Less flicker than full erase."""
+    sys.stdout.write("\x1b[H\x1b[J")
     sys.stdout.flush()
 
 
 def interactive_theme_picker(themes, current_theme_id):
     """
     Arrow-key theme picker with LIVE REAL-TIME PREVIEW.
-    As user presses Up/Down, the entire preview card renders in that exact theme.
-    Enter applies, Esc cancels.
+    Compact layout designed to fit in 24-row terminals.
     """
     hide_cursor()
     selected_idx = 0
@@ -123,48 +120,46 @@ def interactive_theme_picker(themes, current_theme_id):
             e = cur_theme["error"]
             d = cur_theme["dim"]
             txt = cur_theme.get("text", "#ffffff")
+            hl = cur_theme.get("highlight", p)
 
-            clear_screen()
+            _reset_screen()
 
-            # 1. Header
-            console.print(f"[{p}][bold]● Argos Theme Selector[/bold][/{p}] [{d}]· Press [bold]↑[/bold]/[bold]↓[/bold] to navigate, [bold]Enter[/bold] to apply, [bold]Esc[/bold] to cancel[/{d}]\n")
+            # Header
+            console.print(f"  [{p}][bold]Theme Selector[/bold][/{p}] [{d}]|[/{d}] [{d}][bold]Up[/bold]/[bold]Down[/bold] navigate  [bold]Enter[/bold] apply  [bold]Esc[/bold] cancel[/{d}]\n")
 
-            # 2. Theme List
+            # Theme list - compact single-column
             for idx, t in enumerate(themes):
                 is_selected = (idx == selected_idx)
                 is_current = (t["id"] == current_theme_id)
 
-                marker = f"[{p}][bold]❯ ◉[/bold][/{p}]" if is_selected else f"[{d}]  ○[/{d}]"
-                name_fmt = f"[{p}][bold]{t['name']:<22}[/bold][/{p}]" if is_selected else f"[{txt}]{t['name']:<22}[/{txt}]"
-                id_tag = f"[{a}]({t['id']})[/{a}]" if is_selected else f"[{d}]({t['id']})[/{d}]"
-                cur_tag = f" [{s}][bold]● active[/bold][/{s}]" if is_current else ""
+                if is_selected:
+                    marker = f"[{p}]  > [/{p}]"
+                    name_fmt = f"[{p}][bold]{t['name']}[/bold][/{p}]"
+                else:
+                    marker = f"[{d}]    [/{d}]"
+                    name_fmt = f"[{txt}]{t['name']}[/{txt}]"
 
-                console.print(f"  {marker} {name_fmt} {id_tag:<18} [{d}]{t['desc']}[/{d}]{cur_tag}")
+                cur_tag = f" [{s}]<=[/{s}]" if is_current else ""
+                console.print(f"{marker}{name_fmt} [{d}]{t['desc']}[/{d}]{cur_tag}")
 
             console.print()
 
-            # 3. Live Preview Card
-            # Renders sample header, sample prompt, and sample tool output using cur_theme colors
-            preview_content = (
-                f"[{p}][bold]● argos v0.3.0 · remote coding agent orchestrator[/bold][/{p}] [{a}]({cur_theme['name']})[/{a}]\n\n"
-                f"[{d}]Prompt Preview:[/{d}]\n"
-                f"[{p}]●[/{p}] [{s}]yhwu@202.38.247.29[/{s}]:[{d}]/data/yhwu[/{d}] [{a}](agy · gemini-3.8-flash)[/{a}] › [{txt}]帮我查看当前显卡状态并编写代码[/{txt}]\n\n"
-                f"[{d}]Tool & Agent Action Preview:[/{d}]\n"
-                f"[{a}]▸[/{a}] [{txt}]Executing:[/{txt}] [{p}]nvidia-smi --query-gpu=name,memory.used,memory.total[/{p}]\n"
-                f"[{s}]● NVIDIA A800-SXM4-80GB (Used: 4.2GB / 80.0GB, Temp: 38°C)[/{s}]\n"
-                f"[{w}]● Notice: GPU cluster is healthy with 8 available accelerators[/{w}]\n"
-                f"[{e}]● Warning: 0 tasks in queue[/{e}]\n\n"
-                f"[{d}]Color Swatch:[/{d}] [{p}]●[/{p}] [{p}]■[/{p}] [{a}]■[/{a}] [{s}]■[/{s}] [{w}]■[/{w}] [{e}]■[/{e}] [{d}]■[/{d}]"
+            # Compact live preview (7 lines total to fit 24-row terminals)
+            preview = (
+                f"[{p}]>[/{p}] [{txt}]What GPU resources are available?[/{txt}]\n"
+                f"[{a}]>[/{a}] [{d}]Checking system resources...[/{d}]\n"
+                f"  [{s}]+ NVIDIA A800-SXM4 80GB (38C, 4.2/80.0GB used)[/{s}]\n"
+                f"  [{w}]! 8 GPUs available, cluster healthy[/{w}]\n"
+                f"  [{e}]x 0 jobs in queue[/{e}]\n"
+                f"  [{d}]Palette:[/{d}] [{p}]@[/{p}][{a}]@[/{a}][{s}]@[/{s}][{w}]@[/{w}][{e}]@[/{e}][{hl}]@[/{hl}]"
             )
-
             console.print(Panel(
-                preview_content,
-                title=f"[{p}][bold] Live Preview: {cur_theme['name']} [/bold][/{p}]",
-                border_style=p,
-                padding=(1, 2)
+                preview,
+                title=f"[{p}] {cur_theme['name']} [/{p}]",
+                border_style=cur_theme.get("border", d),
+                padding=(0, 1),
+                width=min(60, shutil.get_terminal_size().columns - 4),
             ))
-
-            console.print(f"[{d}]  [↑/↓ or j/k] Select   [Enter] Save Theme   [Esc/q] Cancel[/{d}]")
 
             key = read_single_key()
             if key in ("up", "k"):
@@ -178,13 +173,12 @@ def interactive_theme_picker(themes, current_theme_id):
 
     finally:
         show_cursor()
-        clear_screen()
+        _reset_screen()
 
 
 def interactive_menu_select(title, items, current_idx=0, extra_shortcuts=None, theme=None):
     """
-    General arrow-key interactive selector with extra shortcut key support.
-    extra_shortcuts: dict of char -> (action_name, callback)
+    General arrow-key interactive selector with pagination (max 8 visible).
     """
     hide_cursor()
     p = theme["primary"] if theme else "cyan"
@@ -194,31 +188,44 @@ def interactive_menu_select(title, items, current_idx=0, extra_shortcuts=None, t
     txt = theme.get("text", "white") if theme else "white"
 
     selected_idx = max(0, min(current_idx, len(items) - 1)) if items else 0
+    max_visible = 8
 
     try:
         while True:
-            clear_screen()
-            console.print(f"[{p}][bold]● {title}[/bold][/{p}]\n")
+            _reset_screen()
+            console.print(f"  [{p}][bold]{title}[/bold][/{p}]\n")
 
-            for idx, item in enumerate(items):
+            # Pagination window
+            total = len(items)
+            half = max_visible // 2
+            start = max(0, min(selected_idx - half, total - max_visible))
+            end = min(start + max_visible, total)
+
+            for idx in range(start, end):
+                item = items[idx]
                 is_selected = (idx == selected_idx)
-                marker = f"[{p}][bold]❯ ◉[/bold][/{p}]" if is_selected else f"[{d}]  ○[/{d}]"
+                marker = f"[{p}]  > [/{p}]" if is_selected else f"[{d}]    [/{d}]"
                 label = item.get("label", str(item))
                 desc = item.get("desc", "")
                 badge = item.get("badge", "")
 
-                label_fmt = f"[{p}][bold]{label:<22}[/bold][/{p}]" if is_selected else f"[{txt}]{label:<22}[/{txt}]"
-                desc_fmt = f"[{d}]{desc}[/{d}]" if desc else ""
+                label_fmt = f"[{p}][bold]{label}[/bold][/{p}]" if is_selected else f"[{txt}]{label}[/{txt}]"
+                desc_fmt = f" [{d}]{desc}[/{d}]" if desc else ""
                 badge_fmt = f" [{s}]{badge}[/{s}]" if badge else ""
 
-                console.print(f"  {marker} {label_fmt} {desc_fmt}{badge_fmt}")
+                console.print(f"{marker}{label_fmt}{desc_fmt}{badge_fmt}")
+
+            if total > max_visible:
+                console.print(f"  [{d}]({selected_idx + 1}/{total})[/{d}]")
 
             console.print()
-            shortcuts_hint = "  [↑/↓] Navigate   [Enter] Select   [Esc] Cancel"
+            shortcuts_hint = f"  [{d}]Up/Down navigate  Enter select  Esc cancel[/{d}]"
             if extra_shortcuts:
+                parts = []
                 for k, (name, _) in extra_shortcuts.items():
-                    shortcuts_hint += f"   [{a}][{k}][/{a}] {name}"
-            console.print(f"[{d}]{shortcuts_hint}[/{d}]")
+                    parts.append(f"[{a}]{k}[/{a}] {name}")
+                shortcuts_hint += "  " + "  ".join(parts)
+            console.print(shortcuts_hint)
 
             key = read_single_key()
             if key in ("up", "k"):
@@ -234,4 +241,4 @@ def interactive_menu_select(title, items, current_idx=0, extra_shortcuts=None, t
 
     finally:
         show_cursor()
-        clear_screen()
+        _reset_screen()

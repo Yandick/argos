@@ -202,27 +202,30 @@ class PiSelectList:
             self.selected_index = 0
 
         p = current_theme.get("primary", "#89b4fa")
+        a = current_theme.get("accent", "#cba6f7")
         txt = current_theme.get("text", "#cdd6f4")
-        d = current_theme.get("dim", "#9399b2")
+        d = current_theme.get("dim", "#6c7086")
 
         total = len(items)
         half = self.max_visible // 2
         start_idx = max(0, min(self.selected_index - half, total - self.max_visible))
         end_idx = min(start_idx + self.max_visible, total)
 
+        # Dynamic column width based on longest visible item
+        visible = items[start_idx:end_idx]
+        col_w = max((len(it["cmd"]) for it in visible), default=12) + 2
+
         lines = []
-        is_arg_mode = (" " in text)
         for i in range(start_idx, end_idx):
             item = items[i]
             is_sel = (i == self.selected_index)
-            prefix = "  → " if is_sel else "    "
-            col_w = 14 if not is_arg_mode else 20
+            prefix = "  > " if is_sel else "    "
             lbl = html.escape(f"{item['cmd']:<{col_w}}")
             desc = html.escape(_registry_desc(item))
             if is_sel:
-                lines.append(f'<style fg="{p}"><b>{prefix}{lbl}</b></style> <style fg="{txt}">{desc}</style>')
+                lines.append(f'<style fg="{p}">{prefix}{lbl}</style><style fg="{txt}">{desc}</style>')
             else:
-                lines.append(f'<style fg="{d}">{prefix}{lbl} {desc}</style>')
+                lines.append(f'<style fg="{d}">{prefix}{lbl}{desc}</style>')
 
         if total > self.max_visible:
             lines.append(f'<style fg="{d}">    ({self.selected_index + 1}/{total})</style>')
@@ -264,7 +267,7 @@ class AgentCliApp:
 
             curr_text = (curr_text or "").lstrip()
 
-            # 1. When typing slash command, render Pi SelectList inline directly beneath the prompt
+            # 1. When typing slash command, render SelectList inline
             if curr_text.startswith("/"):
                 rendered_list = self.select_list.render(curr_text, self.theme, self.config, self.session_mgr)
                 if rendered_list:
@@ -276,38 +279,38 @@ class AgentCliApp:
                     msg = _t('toolbar.unknownCmd', cmd=raw_cmd)
                     return HTML(f'<style fg="{err_col}">{msg}</style>')
 
-            # 2. When idle/typing normal prompt, render Pi clean status footer
+            # 2. Single-line status bar (no emojis - they cause cursor drift on Windows)
             session = self._get_active_session()
             p = self.theme["primary"]
             s = self.theme["success"]
             d = self.theme["dim"]
             a = self.theme["accent"]
             proxy = self.config.get_proxy()
-            proxy_str = html.escape(f"proxy: {proxy}" if proxy else "direct")
+            proxy_str = html.escape(f"{proxy}" if proxy else "direct")
 
             if session:
                 srv = html.escape(session.name)
                 rdir = session.remote_dir or "/"
-                if len(rdir) > 26:
-                    rdir = "..." + rdir[-23:]
+                if len(rdir) > 22:
+                    rdir = "..." + rdir[-19:]
                 rdir = html.escape(rdir)
                 agent = html.escape(session.command or "agy")
                 model = html.escape(getattr(session, "model", "") or self.config.get_model(agent))
                 effort = html.escape(str(self.config.get_thinking_effort()))
                 return HTML(
-                    f'<style fg="{s}">● {srv}</style> '
-                    f'<style fg="{d}">│</style> '
-                    f'<style fg="{p}">📁 {rdir}</style> '
-                    f'<style fg="{d}">│</style> '
-                    f'<style fg="{a}">🤖 {agent}:{model} (effort: {effort})</style> '
-                    f'<style fg="{d}">│ {proxy_str} │ [Tab] /help</style>'
+                    f'<style fg="{s}">{srv}</style>'
+                    f'<style fg="{d}"> | </style>'
+                    f'<style fg="{p}">{rdir}</style>'
+                    f'<style fg="{d}"> | </style>'
+                    f'<style fg="{a}">{agent}:{model}</style>'
+                    f'<style fg="{d}"> | effort:{effort} | {proxy_str}</style>'
                 )
             idle_hint = _t('toolbar.idleHint', proxy=proxy_str)
             return HTML(
-                f'<style fg="{d}">● {idle_hint}</style>'
+                f'<style fg="{d}">{idle_hint}</style>'
             )
         except Exception:
-            return HTML(f'<style fg="#9399b2">{_t("toolbar.fallback")}</style>')
+            return HTML(f'<style fg="#6c7086">{_t("toolbar.fallback")}</style>')
 
     def _init_prompt_session(self):
         try:
@@ -403,7 +406,9 @@ class AgentCliApp:
         @bindings.add("escape")
         def _(event):
             buf = event.current_buffer
-            buf.text = ""
+            # Only clear if typing a slash command (autocomplete active)
+            if buf.text.startswith("/"):
+                buf.text = ""
             self.select_list.selected_index = 0
 
         try:
@@ -438,6 +443,7 @@ class AgentCliApp:
         s = self.theme["success"]
         d = self.theme["dim"]
         txt = self.theme.get("text", "#ffffff")
+        border = self.theme.get("border", d)
         t_name = self.theme["name"]
         swatch = render_swatch(self.theme)
 
@@ -458,17 +464,41 @@ class AgentCliApp:
         proxy = self.config.get_proxy()
         proxy_str = f"[{s}]{proxy}[/{s}]" if proxy else f"[{d}]{_t('banner.directNoProxy')}[/{d}]"
 
-        card = (
-            f"[{p}]  ▄▀█ █▀█ █▀▀ █▀█ █▀[/{p}]   [{txt}][bold]argos[/bold][/{txt}] [{d}]v0.3.0 · {_t('banner.tagline')}[/{d}]\n"
-            f"[{p}]  █▀█ █▀▄ █▄█ █▄█ ▄█[/{p}]   [{d}]Ἄργος Πανόπτης · {_t('banner.tagline2')}[/{d}]\n\n"
-            f"  [{a}]{_t('banner.target')}:[/{a}]    [{txt}]{srv_str}[/{txt}] {status_tag}\n"
-            f"  [{a}]{_t('banner.workspace')}:[/{a}] [{p}]{rdir}[/{p}]\n"
-            f"  [{a}]{_t('banner.engine')}:[/{a}]    [{txt}]{agent_str}[/{txt}] [{d}]({_t('banner.effort')}: {effort})[/{d}]\n"
-            f"  [{a}]{_t('banner.proxy')}:[/{a}]     {proxy_str}\n"
-            f"  [{a}]{_t('banner.theme')}:[/{a}]     [{txt}]{t_name}[/{txt}] {swatch}\n\n"
-            f"[{d}]{_t('banner.shortcuts')}:[/{d}] [{a}]/server[/{a}] [{d}]{_t('sc.target')}[/{d}] · [{a}]/files[/{a}] [{d}]{_t('sc.files')}[/{d}] · [{a}]/sh[/{a}] [{d}]{_t('sc.terminal')}[/{d}] · [{a}]/model[/{a}] [{d}]{_t('sc.models')}[/{d}] · [{a}]/proxy[/{a}] [{d}]{_t('sc.proxy')}[/{d}] · [{a}]/help[/{a}] [{d}]{_t('sc.help')}[/{d}]"
+        # Logo + tagline
+        logo = (
+            f"[{p}]  ▄▀█ █▀█ █▀▀ █▀█ █▀[/{p}]   [{txt}][bold]argos[/bold][/{txt}] [{d}]v0.3.0[/{d}]\n"
+            f"[{p}]  █▀█ █▀▄ █▄█ █▄█ ▄█[/{p}]   [{d}]{_t('banner.tagline')}[/{d}]"
         )
-        return Panel(card, border_style=p, padding=(0, 1))
+
+        # Status grid using Rich Table for proper alignment across languages
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(style=a, min_width=10, justify="right")
+        grid.add_column()
+        grid.add_row(f"{_t('banner.target')}", f"[{txt}]{srv_str}[/{txt}] {status_tag}")
+        grid.add_row(f"{_t('banner.workspace')}", f"[{p}]{rdir}[/{p}]")
+        grid.add_row(f"{_t('banner.engine')}", f"[{txt}]{agent_str}[/{txt}] [{d}](effort: {effort})[/{d}]")
+        grid.add_row(f"{_t('banner.proxy')}", proxy_str)
+        grid.add_row(f"{_t('banner.theme')}", f"[{txt}]{t_name}[/{txt}] {swatch}")
+
+        # Compact shortcuts
+        shortcuts = (
+            f"[{d}]/[/{d}][{a}]server[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]files[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]sh[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]model[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]theme[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]help[/{a}]"
+        )
+
+        # Assemble
+        from io import StringIO
+        grid_buf = StringIO()
+        grid_console = Console(file=grid_buf, force_terminal=True, width=shutil.get_terminal_size().columns - 6)
+        grid_console.print(grid, end="")
+        grid_text = grid_buf.getvalue().rstrip()
+
+        card = f"{logo}\n\n{grid_text}\n\n  {shortcuts}"
+        return Panel(card, border_style=border, padding=(1, 2))
 
     def run(self):
         console.clear()
@@ -539,22 +569,12 @@ class AgentCliApp:
 
         if session:
             srv_info = session.server_info or {}
-            host = srv_info.get("name") or srv_info.get("host", "local")
-            rdir = session.remote_dir or "/"
-            if len(rdir) > 20:
-                rdir = "..." + rdir[-17:]
-            agent = session.command or "agy"
-            model_info = getattr(session, "model", "") or self.config.get_model(agent)
-            model_short = model_info.split("/")[-1] if model_info else ""
-            model_tag = f"·{model_short}" if model_short else ""
+            host = html.escape(srv_info.get("name") or srv_info.get("host", "local"))
             return HTML(
-                f'<style fg="{p}">●</style> '
-                f'<style fg="{s}"><b>[{host}]</b></style> '
-                f'<style fg="{d}">📁 {rdir}</style> '
-                f'<style fg="{a}">({agent}{model_tag})</style> '
-                f'<style fg="{p}">›</style> '
+                f'<style fg="{s}"><b>{host}</b></style> '
+                f'<style fg="{p}">></style> '
             )
-        return HTML(f'<style fg="{p}">●</style> <b>argos</b> <style fg="{a}">›</style> ')
+        return HTML(f'<style fg="{p}"><b>argos</b></style> <style fg="{a}">></style> ')
 
     def handle_slash_command(self, cmd, arg):
         known_cmds = [
@@ -635,29 +655,46 @@ class AgentCliApp:
         p = self.theme["primary"]
         a = self.theme["accent"]
         d = self.theme["dim"]
-        console.print(f"\n[{p}][bold]● {_t('help.title')}[/bold][/{p}]")
-        cmds = [
-            ("/server", "help.server"),
-            ("/files, /ls", "help.files"),
-            ("/terminal, /sh", "help.terminal"),
-            ("/model [name]", "help.model"),
-            ("/effort [level]", "help.effort"),
-            ("/proxy [url|off]", "help.proxy"),
-            ("/tasks", "help.tasks"),
-            ("/switch <name|#>", "help.switch"),
-            ("/agent <name>", "help.agent"),
-            ("/status", "help.status"),
-            ("/broadcast <cmd>", "help.broadcast"),
-            ("/theme [name]", "help.theme"),
-            ("/lang [en|zh]", "help.lang"),
-            ("/close [name|#]", "help.close"),
-            ("/config", "help.config"),
-            ("/clear", "help.clear"),
-            ("/exit, /quit", "help.exit"),
+        txt = self.theme.get("text", "#cdd6f4")
+        border = self.theme.get("border", d)
+
+        console.print(f"\n  [{p}][bold]{_t('help.title')}[/bold][/{p}]\n")
+
+        # Group commands by category from COMMAND_REGISTRY
+        cat_order = ["Remote", "Agent", "Tasks", "System"]
+        groups = {}
+        for item in COMMAND_REGISTRY:
+            cat = item.get("cat", "System")
+            groups.setdefault(cat, []).append(item)
+
+        # Also include aliases not in registry
+        extra_cmds = [
+            {"cmd": "/agent", "cat": "Agent", "desc_key": "help.agent", "usage": "<name>"},
+            {"cmd": "/close", "cat": "Tasks", "desc_key": "help.close", "usage": "[name|#]"},
         ]
-        for c, desc_key in cmds:
-            console.print(f"  [{a}]{c:<20}[/{a}] [{d}]{_t(desc_key)}[/{d}]")
-        console.print()
+        for item in extra_cmds:
+            cat = item.get("cat", "System")
+            # Don't add duplicates
+            existing = [c["cmd"] for c in groups.get(cat, [])]
+            if item["cmd"] not in existing:
+                groups.setdefault(cat, []).append(item)
+
+        for cat in cat_order:
+            items = groups.get(cat, [])
+            if not items:
+                continue
+            console.print(f"  [{d}]{cat}[/{d}]")
+            for item in items:
+                cmd_str = item["cmd"]
+                usage = item.get("usage", "")
+                if usage:
+                    cmd_str = f"{cmd_str} {usage}"
+                desc = _registry_desc(item)
+                console.print(f"    [{a}]{cmd_str:<22}[/{a}][{d}]{desc}[/{d}]")
+            console.print()
+
+        console.print(f"  [{d}]Type naturally to send prompts to the AI agent.[/{d}]")
+        console.print(f"  [{d}]Ctrl+C twice to exit | Tab to autocomplete | Esc to clear[/{d}]\n")
 
     def action_lang(self, arg=""):
         """Switch the interface language (en/zh) and persist it to setting.json."""
