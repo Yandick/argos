@@ -25,6 +25,7 @@ if sys.platform == "win32":
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.markup import escape as rich_escape
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.document import Document
@@ -585,7 +586,7 @@ class AgentCliApp:
                         pass
                 sys.exit(0)
             except Exception as e:
-                console.print(f"[{self.theme['error']}]● {_t('run.error')}:[/{self.theme['error']}] {e}")
+                console.print(f"[{self.theme['error']}]● {_t('run.error')}:[/{self.theme['error']}] {rich_escape(str(e))}")
 
     def _get_active_session(self):
         if self.active_session_id:
@@ -1150,16 +1151,16 @@ class AgentCliApp:
         srv_host = server_info.get("host", "local")
         srv_user = server_info.get("user") or server_info.get("username") or "root"
         srv_str = f"{srv_user}@{srv_host}:{server_info.get('port', 22)}" if not is_local else "local machine"
-        proxy_info = "127.0.0.1:[10808/7897] ➔ 7897 (SSH tunnel active)" if self.config.get_proxy() else "direct"
+        proxy_info = "127.0.0.1:(10808/7897) ➔ 7897 (SSH tunnel active)" if self.config.get_proxy() else "direct"
 
         banner = (
             f"[{s}][bold]● Connected: {task_name}[/bold][/{s}] [{d}]({session.session_type})[/{d}]\n\n"
-            f"  [{a}]Target:[/{a}]          [{txt}]{task_name}[/{txt}] [{d}]({srv_str})[/dim]\n"
+            f"  [{a}]Target:[/{a}]          [{txt}]{task_name}[/{txt}] [{d}]({srv_str})[/{d}]\n"
             f"  [{a}]Directory:[/{a}]       [{p}]{work_dir}[/{p}]\n"
             f"{files_line}"
-            f"  [{a}]Engine:[/{a}]          [{txt}]{agent_type}[/{txt}] [{d}]({model_name}, effort: {effort_level})[/dim]\n"
+            f"  [{a}]Engine:[/{a}]          [{txt}]{agent_type}[/{txt}] [{d}]({model_name}, effort: {effort_level})[/{d}]\n"
             f"  [{a}]Proxy Tunnel:[/{a}]    [{s}]{proxy_info}[/{s}]\n\n"
-            f"[{d}]Quick Actions: Type prompt to dispatch · [/][{a}]/files[/] [{d}]list files · [/][{a}]/sh[/] [{d}]terminal · [/][{a}]/status[/] [{d}]GPU status[/{d}]"
+            f"[{d}]Quick Actions: Type prompt to dispatch · [/{d}][{a}]/files[/{a}] [{d}]list files · [/{d}][{a}]/sh[/{a}] [{d}]terminal · [/{d}][{a}]/status[/{a}] [{d}]GPU status[/{d}]"
         )
         console.print(Panel(banner, border_style=s, padding=(0, 1)))
         console.print()
