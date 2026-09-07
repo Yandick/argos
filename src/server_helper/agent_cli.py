@@ -51,7 +51,7 @@ if _ROOT not in sys.path:
 
 from server_helper.config import Config
 from server_helper.theme import get_theme, list_themes, render_swatch, get_prompt_toolkit_style
-from server_helper.ui_picker import interactive_theme_picker, interactive_menu_select
+from server_helper.ui_picker import interactive_theme_picker, interactive_menu_select, interactive_dir_picker
 from server_helper.agent_detector import (
     detect_local_agents,
     get_installed_agents,
@@ -71,6 +71,7 @@ console = Console()
 
 COMMAND_REGISTRY = [
     {"cmd": "/server",    "cat": "Remote", "desc_key": "cmd.server", "usage": "[scut-gpu|add|rename|rm]"},
+    {"cmd": "/cd",        "cat": "Remote", "desc_key": "cmd.cd",     "usage": "[path]"},
     {"cmd": "/agent",     "cat": "Agent",  "desc_key": "cmd.agent",  "usage": "[agy|claude|opencode|codex]"},
     {"cmd": "/model",     "cat": "Agent",  "desc_key": "cmd.model",  "usage": "[gemini-3.8-flash|claude-3-7-sonnet|...]"},
     {"cmd": "/effort",    "cat": "Agent",  "desc_key": "cmd.effort", "usage": "[high|medium|low|off]"},
@@ -154,6 +155,7 @@ class PiSelectList:
         subcommand_cmds = (
             "/agent", "/model", "/effort", "/thinking", "/theme",
             "/lang", "/language", "/server", "/connect", "/c",
+            "/cd", "/workspace", "/ws",
             "/close", "/stop", "/switch", "/sw"
         )
 
@@ -187,6 +189,42 @@ class PiSelectList:
                     {"cmd": "en", "desc": "English"},
                     {"cmd": "zh", "desc": "中文"},
                 ]
+            elif raw_cmd in ("/cd", "/workspace", "/ws"):
+                candidates = []
+                session = None
+                if session_mgr:
+                    for s in session_mgr.sessions.values():
+                        if s.status == "running":
+                            session = s
+                            break
+                srv_name = session.name if session else "local"
+                recent = config.get_recent_workspaces(srv_name)
+                for r in recent:
+                    candidates.append({"cmd": r, "desc": "Recent workspace"})
+
+                curr_dir = (session.remote_dir if session else os.getcwd()) or "/"
+                if session and session.session_type == "remote_ssh" and hasattr(session.backend, "list_sftp_files"):
+                    try:
+                        import posixpath
+                        entries = session.backend.list_sftp_files(curr_dir)
+                        if isinstance(entries, list) and not (entries and "error" in entries[0]):
+                            for e in entries:
+                                if e.get("is_dir") and not str(e.get("name", "")).startswith("."):
+                                    p = posixpath.normpath(posixpath.join(curr_dir, e["name"]))
+                                    if not any(c["cmd"] == p for c in candidates):
+                                        candidates.append({"cmd": p, "desc": f"Subfolder in {curr_dir}"})
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        base = curr_dir if os.path.isabs(curr_dir) else os.getcwd()
+                        for entry in os.scandir(base):
+                            if entry.is_dir() and not entry.name.startswith("."):
+                                p = os.path.normpath(entry.path)
+                                if not any(c["cmd"] == p for c in candidates):
+                                    candidates.append({"cmd": p, "desc": f"Subfolder in {base}"})
+                    except Exception:
+                        pass
             elif raw_cmd in ("/server", "/connect", "/c"):
                 servers = config.get_servers()
                 candidates = [{"cmd": s.get("name", ""), "desc": f"{s.get('user', 'root')}@{s.get('host', '')}"} for s in servers if s.get("name")]
@@ -544,6 +582,7 @@ class AgentCliApp:
         # Compact shortcuts
         shortcuts = (
             f"[{d}]/[/{d}][{a}]server[/{a}] [{d}]·[/{d}] "
+            f"[{d}]/[/{d}][{a}]cd[/{a}] [{d}]·[/{d}] "
             f"[{d}]/[/{d}][{a}]agent[/{a}] [{d}]·[/{d}] "
             f"[{d}]/[/{d}][{a}]model[/{a}] [{d}]·[/{d}] "
             f"[{d}]/[/{d}][{a}]files[/{a}] [{d}]·[/{d}] "
@@ -641,6 +680,7 @@ class AgentCliApp:
     def handle_slash_command(self, cmd, arg):
         known_cmds = [
             "/exit", "/quit", "/help", "/clear", "/server", "/connect", "/c",
+            "/cd", "/workspace", "/ws",
             "/theme", "/model", "/effort", "/thinking", "/proxy", "/files",
             "/ls", "/dir", "/tasks", "/sessions", "/switch", "/sw", "/terminal",
             "/term", "/sh", "/agent", "/status", "/broadcast", "/b", "/config",
@@ -667,6 +707,9 @@ class AgentCliApp:
 
         elif cmd in ("/server", "/connect", "/c"):
             self.action_servers(arg)
+
+        elif cmd in ("/cd", "/workspace", "/ws"):
+            self.action_cd(arg)
 
         elif cmd == "/theme":
             self.action_theme(arg)
@@ -972,47 +1015,49 @@ class AgentCliApp:
             return
 
     def action_servers(self, arg=""):
-        arg_lower = (arg or "").strip().lower()
+        parts = (arg or "").strip().split(maxsplit=1)
+        target_name = parts[0].lower() if parts else ""
+        custom_dir = parts[1].strip() if len(parts) > 1 else None
 
-        if arg_lower == "add":
+        if target_name == "add":
             new_srv = self._prompt_new_server()
             if new_srv:
-                self._connect_to_server(new_srv)
+                self._connect_to_server(new_srv, target_dir=custom_dir)
             return
 
-        if arg_lower.startswith("rename"):
-            parts = arg.split()
-            old_name = parts[1] if len(parts) > 1 else ""
-            new_name = parts[2] if len(parts) > 2 else ""
+        if target_name.startswith("rename"):
+            r_parts = arg.split()
+            old_name = r_parts[1] if len(r_parts) > 1 else ""
+            new_name = r_parts[2] if len(r_parts) > 2 else ""
             self._prompt_rename_server(old_name, new_name)
             return
 
-        if arg_lower in ("rm", "remove", "del"):
+        if target_name in ("rm", "remove", "del"):
             self._prompt_remove_server()
             return
 
         servers = self.config.get_servers()
 
         # Direct server connection by name or 'local'
-        if arg_lower == "local":
-            self._connect_to_server({"is_local": True, "name": "local", "default_dir": os.getcwd()})
+        if target_name == "local":
+            self._connect_to_server({"is_local": True, "name": "local", "default_dir": custom_dir or os.getcwd()}, target_dir=custom_dir)
             return
 
-        if arg_lower:
-            matched = [s for s in servers if s.get("name", "").lower() == arg_lower or s.get("host", "").lower() == arg_lower or s.get("id", "").lower() == arg_lower]
+        if target_name:
+            matched = [s for s in servers if s.get("name", "").lower() == target_name or s.get("host", "").lower() == target_name or s.get("id", "").lower() == target_name]
             if matched:
-                self._connect_to_server(matched[0])
+                self._connect_to_server(matched[0], target_dir=custom_dir)
                 return
 
-            if arg_lower in ("codex", "claude", "agy", "opencode", "shell"):
-                console.print(f"[{self.theme['accent']}]● Detected agent '{arg_lower}'. Switching active agent to '{arg_lower}'...[/{self.theme['accent']}]")
-                self.action_set_agent(arg_lower)
+            if target_name in ("codex", "claude", "agy", "opencode", "shell"):
+                console.print(f"[{self.theme['accent']}]● Detected agent '{target_name}'. Switching active agent to '{target_name}'...[/{self.theme['accent']}]")
+                self.action_set_agent(target_name)
                 if servers:
-                    self._connect_to_server(servers[0])
+                    self._connect_to_server(servers[0], target_dir=custom_dir)
                 return
 
             avail = ["local"] + [s.get("name", "") for s in servers if s.get("name")]
-            console.print(f"[{self.theme['warning']}]● Server not found: {arg}. Available: {', '.join(avail)}[/{self.theme['warning']}]\n")
+            console.print(f"[{self.theme['warning']}]● Server not found: {target_name}. Available: {', '.join(avail)}[/{self.theme['warning']}]\n")
             return
 
         active = self._get_active_session()
@@ -1022,11 +1067,14 @@ class AgentCliApp:
         menu_items = []
         # [0] Local
         local_badge = "● active" if (active and active.session_type == "local_pty") else ""
+        local_recent = self.config.get_recent_workspaces("local")
+        local_ws = local_recent[0] if local_recent else os.getcwd()
         menu_items.append({
             "label": "Local Machine",
-            "desc": f"native PTY · {os.getcwd()}",
+            "desc": f"native PTY · {local_ws}",
             "badge": local_badge,
-            "raw": {"is_local": True, "name": "local", "default_dir": os.getcwd()}
+            "raw": {"is_local": True, "name": "local", "default_dir": local_ws},
+            "target_dir": local_ws
         })
 
         # [1..N] Remote servers
@@ -1036,21 +1084,25 @@ class AgentCliApp:
             h = s.get("host")
             p = s.get("port", 22)
             auth = s.get("auth_type", "password")
+            recent_ws = self.config.get_recent_workspaces(s.get("name"))
+            curr_ws = recent_ws[0] if recent_ws else (s.get('default_dir') or '/')
             menu_items.append({
                 "label": s.get("name", "remote"),
-                "desc": f"{u}@{h}:{p} ({auth}) · {s.get('default_dir') or '/'}",
+                "desc": f"{u}@{h}:{p} ({auth}) · {curr_ws}",
                 "badge": is_cur,
-                "raw": s
+                "raw": s,
+                "target_dir": curr_ws
             })
 
         extra_keys = {
             "a": ("add server", None),
             "r": ("rename server", None),
-            "d": ("delete server", None)
+            "d": ("delete server", None),
+            "w": ("custom dir", None)
         }
 
         action, chosen_item, _ = interactive_menu_select(
-            title="Available Environments (↑/↓ to navigate, Enter to connect, [a] add, [r] rename, [d] delete)",
+            title="Available Environments (↑/↓ to navigate, Enter to connect, [a] add, [r] rename, [d] delete, [w] custom dir)",
             items=menu_items,
             extra_shortcuts=extra_keys,
             theme=self.theme
@@ -1060,7 +1112,18 @@ class AgentCliApp:
         console.print(self.render_header())
 
         if action == "select" and chosen_item:
-            self._connect_to_server(chosen_item["raw"])
+            self._connect_to_server(chosen_item["raw"], target_dir=chosen_item.get("target_dir"))
+        elif action == "custom dir" and chosen_item:
+            srv = chosen_item["raw"]
+            is_loc = srv.get("is_local", False)
+            def_d = chosen_item.get("target_dir") or srv.get("default_dir") or ("/data/workspace" if not is_loc else os.getcwd())
+            console.print(f"\n  [{self.theme['accent']}]Enter workspace directory for [{srv.get('name', 'server')}]:[/{self.theme['accent']}]")
+            try:
+                val = input(f"  › Directory [{def_d}]: ").strip()
+                target_d = val if val else def_d
+                self._connect_to_server(srv, target_dir=target_d)
+            except (KeyboardInterrupt, EOFError):
+                pass
         elif action == "add server":
             new_srv = self._prompt_new_server()
             if new_srv:
@@ -1116,10 +1179,12 @@ class AgentCliApp:
         else:
             console.print(f"[{self.theme['error']}]● Rename failed: {res}[/{self.theme['error']}]\n")
 
-    def _connect_to_server(self, server_info):
+    def _connect_to_server(self, server_info, target_dir=None):
         is_local = server_info.get("is_local", False)
 
-        if is_local:
+        if target_dir:
+            work_dir = target_dir
+        elif is_local:
             work_dir = server_info.get("default_dir") or os.getcwd()
         else:
             work_dir = server_info.get("default_dir") or "/data/workspace"
@@ -1166,6 +1231,9 @@ class AgentCliApp:
 
         session.model = model_name
         self.active_session_id = session.session_id
+
+        # Record connected workspace into recent history
+        self.config.add_recent_workspace(task_name, work_dir)
 
         p = self.theme["primary"]
         s = self.theme["success"]
@@ -1274,6 +1342,150 @@ class AgentCliApp:
                 console.print(f"[{self.theme['success']}]● Server '{target.get('name')}' removed.[/{self.theme['success']}]")
         except (KeyboardInterrupt, EOFError):
             pass
+
+    def action_cd(self, arg=""):
+        session = self._get_active_session()
+        srv_name = session.name if session else "local"
+        recent_dirs = self.config.get_recent_workspaces(srv_name)
+
+        arg = (arg or "").strip()
+        if arg:
+            # Direct path passed: /cd <path>
+            target_path = arg
+            if session and session.session_type == "remote_ssh":
+                import posixpath
+                base_dir = session.remote_dir or "/"
+                if not target_path.startswith("/"):
+                    target_path = posixpath.normpath(posixpath.join(base_dir, target_path))
+                else:
+                    target_path = posixpath.normpath(target_path)
+            else:
+                base_dir = session.remote_dir if session else os.getcwd()
+                if not os.path.isabs(target_path):
+                    target_path = os.path.normpath(os.path.join(base_dir, target_path))
+                else:
+                    target_path = os.path.normpath(target_path)
+
+            self._apply_workspace_change(session, target_path)
+            return
+
+        # Interactive arrow-key directory browser
+        if session and session.session_type == "remote_ssh":
+            curr_dir = session.remote_dir or "/"
+
+            def list_remote_dirs(path):
+                if not hasattr(session.backend, "list_sftp_files"):
+                    return []
+                entries = session.backend.list_sftp_files(path)
+                if entries and len(entries) == 1 and "error" in entries[0]:
+                    raise Exception(entries[0]["error"])
+                return [
+                    e["name"] for e in entries
+                    if e.get("is_dir") and not str(e.get("name", "")).startswith(".")
+                ]
+
+            chosen = interactive_dir_picker(
+                initial_dir=curr_dir,
+                list_dirs_fn=list_remote_dirs,
+                is_remote=True,
+                recent_dirs=recent_dirs,
+                theme=self.theme,
+                title=f"{_t('cd.title')} [{session.name}]"
+            )
+        else:
+            curr_dir = (session.remote_dir if session else os.getcwd()) or os.getcwd()
+
+            def list_local_dirs(path):
+                subdirs = []
+                try:
+                    for entry in os.scandir(path):
+                        if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
+                            subdirs.append(entry.name)
+                except Exception as ex:
+                    raise ex
+                subdirs.sort(key=str.lower)
+                return subdirs
+
+            chosen = interactive_dir_picker(
+                initial_dir=curr_dir,
+                list_dirs_fn=list_local_dirs,
+                is_remote=False,
+                recent_dirs=recent_dirs,
+                theme=self.theme,
+                title=f"{_t('cd.title')} [local]"
+            )
+
+        if chosen:
+            self._apply_workspace_change(session, chosen)
+        else:
+            console.clear()
+            console.print(self.render_header())
+
+    def _apply_workspace_change(self, session, target_dir):
+        if not target_dir:
+            return
+
+        p = self.theme["primary"]
+        s = self.theme["success"]
+        a = self.theme["accent"]
+        d = self.theme["dim"]
+        txt = self.theme.get("text", "#ffffff")
+
+        srv_name = session.name if session else "local"
+        self.config.add_recent_workspace(srv_name, target_dir)
+
+        if session:
+            session.remote_dir = target_dir
+            try:
+                if session.session_type == "remote_ssh":
+                    if session.command == "agy":
+                        session.backend.write(f"/cd {target_dir}\n")
+                    else:
+                        import shlex
+                        session.backend.write(f"cd {shlex.quote(target_dir)}\r\n")
+                elif session.session_type == "local_pty":
+                    session.backend.write(f"cd {target_dir}\r\n")
+                    try:
+                        os.chdir(target_dir)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        else:
+            try:
+                os.chdir(target_dir)
+            except Exception:
+                pass
+
+        # Fetch snapshot of new directory contents
+        entries = []
+        try:
+            if session and session.session_type == "remote_ssh" and hasattr(session.backend, "list_sftp_files"):
+                entries = session.backend.list_sftp_files(target_dir)
+            else:
+                local_p = target_dir if os.path.isabs(target_dir) else os.path.join(os.getcwd(), target_dir)
+                for f in os.listdir(local_p):
+                    entries.append({"name": f, "is_dir": os.path.isdir(os.path.join(local_p, f))})
+                entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+        except Exception:
+            pass
+
+        console.clear()
+        console.print(self.render_header())
+
+        lines = [f"[{s}][bold]● {_t('cd.switched', path=target_dir)}[/bold][/{s}]"]
+        if entries and not (len(entries) == 1 and "error" in entries[0]):
+            dirs = [e["name"] + "/" for e in entries if e.get("is_dir")][:6]
+            files = [e["name"] for e in entries if not e.get("is_dir")][:8]
+            d_str = " ".join(dirs)
+            f_str = " ".join(files)
+            if d_str:
+                lines.append(f"  [{a}]Subfolders:[/{a}] [{txt}]{d_str}[/{txt}]")
+            if f_str:
+                lines.append(f"  [{a}]Files:[/{a}]      [{txt}]{f_str}[/{txt}] [{d}]({len(entries)} items · /files to view all)[/{d}]")
+
+        console.print(Panel("\n".join(lines), border_style=s, padding=(0, 1)))
+        console.print()
 
     def action_list_files(self, arg=""):
         session = self._get_active_session()

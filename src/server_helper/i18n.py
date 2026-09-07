@@ -14,6 +14,7 @@ _STRINGS = {
     "en": {
         # Command registry (short descriptions shown in completion + /help)
         "cmd.server": "Switch or manage remote target servers",
+        "cmd.cd": "Change or browse workspace directory (interactive or path)",
         "cmd.files": "Browse workspace files & directory tree (zero tokens)",
         "cmd.sh": "Attach the full interactive terminal (Ctrl+] to return)",
         "cmd.agent": "Detect & switch local AI agent engine (agy, claude, opencode...)",
@@ -34,6 +35,7 @@ _STRINGS = {
         # Detailed help list
         "help.title": "Argos Commands",
         "help.server": "Interactive server manager (↑/↓ to select, [a] add, [r] rename)",
+        "help.cd": "Change workspace directory (interactive browser or /cd <path>)",
         "help.files": "List files and directories in remote workspace (zero tokens)",
         "help.terminal": "Attach raw interactive terminal to active session (Ctrl+] to detach)",
         "help.model": "Select model for agent (gemini-3.8-flash, claude-3-7-sonnet...)",
@@ -80,6 +82,11 @@ _STRINGS = {
         "agent.active": "active",
         "agent.installed": "installed",
 
+        # Workspace directory command
+        "cd.title": "Select Workspace Directory",
+        "cd.switched": "Workspace changed to: {path}",
+        "cd.notFound": "Directory not found: {path}",
+
         # Bottom toolbar
         "toolbar.unknownCmd": "Unknown command: {cmd} (type /help for the command list)",
         "toolbar.idleHint": "idle │ type /server to connect a target │ {proxy} │ [Tab] /help",
@@ -98,6 +105,7 @@ _STRINGS = {
 
     "zh": {
         "cmd.server": "切换或管理远程目标服务器 (scut-gpu 等)",
+        "cmd.cd": "切换或浏览工作区目录 (交互式浏览器或直接路径)",
         "cmd.files": "浏览工作区文件与目录树 (免耗 token)",
         "cmd.sh": "连接全功能交互式终端 (Ctrl+] 返回)",
         "cmd.agent": "自动探测并切换本地已安装的 AI Agent (agy, claude, opencode...)",
@@ -117,6 +125,7 @@ _STRINGS = {
 
         "help.title": "Argos 指令列表",
         "help.server": "交互式服务器管理 (↑/↓ 选择, [a] 添加, [r] 重命名)",
+        "help.cd": "切换工作区目录 (交互式浏览器或 /cd <路径>)",
         "help.files": "列出远程工作区文件与目录 (免耗 token)",
         "help.terminal": "挂接原生交互终端到当前会话 (Ctrl+] 脱离)",
         "help.model": "为 Agent 选择模型 (gemini-3.8-flash, claude-3-7-sonnet...)",
@@ -161,6 +170,11 @@ _STRINGS = {
         "agent.notFound": "未在系统 PATH 中检测到 Agent '{name}'，请先安装。",
         "agent.active": "当前生效",
         "agent.installed": "已安装",
+
+        # Workspace directory command
+        "cd.title": "选择工作区目录",
+        "cd.switched": "工作目录已切换至: {path}",
+        "cd.notFound": "目录不存在或无法访问: {path}",
 
         "toolbar.unknownCmd": "未知命令: {cmd} (输入 /help 查看命令列表)",
         "toolbar.idleHint": "空闲 │ 输入 /server 连接目标环境 │ {proxy} │ [Tab] /help",

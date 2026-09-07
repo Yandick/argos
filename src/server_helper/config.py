@@ -235,6 +235,22 @@ class Config:
         self._save()
         return True, new_name
 
+    def get_recent_workspaces(self, server_name_or_id):
+        key = f"recent_workspaces_{server_name_or_id}"
+        return self.data.get("settings", {}).get(key, [])
+
+    def add_recent_workspace(self, server_name_or_id, workspace_path):
+        if not workspace_path or not server_name_or_id:
+            return
+        key = f"recent_workspaces_{server_name_or_id}"
+        settings = self.data.setdefault("settings", {})
+        recent = settings.get(key, [])
+        if workspace_path in recent:
+            recent.remove(workspace_path)
+        recent.insert(0, workspace_path)
+        settings[key] = recent[:10]
+        self._save()
+
     def get_agents(self):
         return self.data.get("agents", {})
 
