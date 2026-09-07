@@ -58,6 +58,10 @@ from server_helper.agent_detector import (
     is_agent_installed,
     build_startup_command
 )
+from server_helper.agent_models import (
+    get_agent_models,
+    get_default_model_for_agent
+)
 from server_helper import i18n
 from server_helper.i18n import t as _t
 from session_manager import SessionManager
@@ -149,7 +153,14 @@ class PiSelectList:
                     for a in detected
                 ]
             elif raw_cmd == "/model":
-                candidates = [{"cmd": m["label"], "desc": m["desc"]} for m in POPULAR_MODELS]
+                active_agent = config.get_settings().get("default_agent", "agy")
+                if session_mgr:
+                    for s in session_mgr.sessions.values():
+                        if s.status == "running" and s.command:
+                            active_agent = s.command
+                            break
+                models = get_agent_models(active_agent)
+                candidates = [{"cmd": m["cmd"], "desc": m["desc"]} for m in models]
             elif raw_cmd in ("/effort", "/thinking"):
                 candidates = [
                     {"cmd": "high", "desc": "Full reasoning capability (recommended)"},
@@ -778,19 +789,40 @@ class AgentCliApp:
         agent = (session.command if session else None) or self.config.get_settings().get("default_agent", "agy")
         curr_model = getattr(session, "model", "") or self.config.get_model(agent)
 
+        models = get_agent_models(agent)
+
         if arg:
             self.config.set_model(arg, agent)
             if session:
                 session.model = arg
                 if agent == "agy" and session.backend:
                     session.backend.write(f"/model {arg}\n")
+            console.clear()
+            console.print(self.render_header())
             console.print(f"[{self.theme['success']}]● Model set to: [bold]{arg}[/bold] (agent: {agent})[/{self.theme['success']}]\n")
             return
 
-        # Interactive arrow-key model selection
+        # Interactive arrow-key model selection from agent's local models
+        items = []
+        selected_idx = 0
+        for idx, m in enumerate(models):
+            is_cur = (m["cmd"] == curr_model)
+            if is_cur:
+                selected_idx = idx
+            badge = m.get("badge", "")
+            if is_cur:
+                badge = f"● {badge} (active)" if badge else "● active"
+            items.append({
+                "label": m["cmd"],
+                "desc": m["desc"],
+                "badge": badge,
+                "installed": True
+            })
+
         action, chosen_item, _ = interactive_menu_select(
-            title=f"Select AI Model (Agent: {agent})",
-            items=POPULAR_MODELS,
+            title=f"Select AI Model for [{agent}]",
+            items=items,
+            current_idx=selected_idx,
             theme=self.theme
         )
         if action == "select" and chosen_item:
@@ -802,7 +834,7 @@ class AgentCliApp:
                     session.backend.write(f"/model {model_name}\n")
             console.clear()
             console.print(self.render_header())
-            console.print(f"[{self.theme['success']}]● Active model set to: [bold]{model_name}[/bold][/{self.theme['success']}]\n")
+            console.print(f"[{self.theme['success']}]● Model switched to: [bold]{model_name}[/bold] (agent: {agent})[/{self.theme['success']}]\n")
         else:
             console.clear()
             console.print(self.render_header())
@@ -1429,8 +1461,10 @@ class AgentCliApp:
             console.print(f"[{self.theme['warning']}]● {_t('agent.notFound', name=agent_name)}[/{self.theme['warning']}]\n")
             return
 
+        new_model = self.config.get_model(agent_name)
         if session:
             session.command = agent_name
+            session.model = new_model
         self.config.update_settings({"default_agent": agent_name})
 
         console.clear()
@@ -1438,7 +1472,8 @@ class AgentCliApp:
         ver_tag = f" ({info['version']})" if info.get("version") else ""
         path_tag = f" [{self.theme['dim']}]{info.get('path', '')}[/{self.theme['dim']}]" if info.get('path') else ""
         switched_label = f"[bold]{info['name']}{ver_tag}[/bold]"
-        console.print(f"[{self.theme['success']}]● {_t('agent.switched', name=switched_label)}{path_tag}[/{self.theme['success']}]\n")
+        console.print(f"[{self.theme['success']}]● {_t('agent.switched', name=switched_label)}{path_tag}[/{self.theme['success']}]")
+        console.print(f"[{self.theme['dim']}]  Model: [bold]{new_model}[/bold] (synced from {agent_name} local configuration)[/{self.theme['dim']}]\n")
 
     def action_show_status(self):
         session = self._get_active_session()

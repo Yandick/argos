@@ -240,7 +240,7 @@ class Config:
 
     def get_agent(self, name):
         agents = self.get_agents()
-        return agents.get(name) or agents.get("claude")
+        return agents.get(name)
 
     def get_settings(self):
         return self.data.get("settings", {})
@@ -257,15 +257,22 @@ class Config:
             ag = self.get_agent(agent_name)
             if ag and ag.get("model"):
                 return ag.get("model")
+            try:
+                from server_helper.agent_models import get_default_model_for_agent
+                return get_default_model_for_agent(agent_name)
+            except Exception:
+                pass
         return settings.get("default_model") or "gemini-3.8-flash"
 
     def set_model(self, model_name, agent_name=None):
         model_name = (model_name or "").strip()
         if agent_name:
             agents = self.get_agents()
-            if agent_name in agents:
-                agents[agent_name]["model"] = model_name
+            if agent_name not in agents:
+                agents[agent_name] = {}
+            agents[agent_name]["model"] = model_name
         self.update_settings({"default_model": model_name})
+        self._save()
         return model_name
 
     def get_thinking_effort(self):
