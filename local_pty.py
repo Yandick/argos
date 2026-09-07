@@ -76,6 +76,22 @@ class LocalPtySession:
                 return f'"{agy_cmd}" {cmd[3:]}'.strip()
             return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
 
+        # If user asked for codex
+        if cmd == "codex" or cmd.startswith("codex "):
+            codex_cmd = shutil.which("codex.cmd") or shutil.which("codex.exe") or shutil.which("codex")
+            args = cmd[5:].strip()
+            if codex_cmd and os.path.exists(codex_cmd):
+                return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{codex_cmd}\' {args}"'.strip()
+            return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
+
+        # If user asked for opencode
+        if cmd == "opencode" or cmd.startswith("opencode "):
+            opencode_cmd = shutil.which("opencode.cmd") or shutil.which("opencode.exe") or shutil.which("opencode")
+            args = cmd[8:].strip()
+            if opencode_cmd and os.path.exists(opencode_cmd):
+                return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{opencode_cmd}\' {args}"'.strip()
+            return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
+
         # Default shell if empty or powershell
         if cmd in ("pwsh", "powershell", "powershell.exe"):
             return "powershell.exe -NoLogo -ExecutionPolicy Bypass"

@@ -131,6 +131,12 @@ class SessionManager:
             except Exception:
                 pass
 
+            # Ensure common agent binary paths on remote Linux are available in PATH
+            full_init_cmd += (
+                'export PATH="$HOME/.local/bin:$HOME/.local/share/pi-node/node-v22.23.2-linux-x64/bin:'
+                '$HOME/.opencode/bin:$HOME/miniconda3/bin:$HOME/anaconda3/bin:$PATH"; '
+            )
+
             if remote_dir:
                 full_init_cmd += f"cd {shlex.quote(remote_dir)} 2>/dev/null\n"
             if startup_cmd:

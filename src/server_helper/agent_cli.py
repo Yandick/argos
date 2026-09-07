@@ -137,6 +137,11 @@ class PiSelectList:
     def __init__(self, max_visible=5):
         self.max_visible = max_visible
         self.selected_index = 0
+        self.has_navigated = False
+
+    def reset(self):
+        self.selected_index = 0
+        self.has_navigated = False
 
     def get_items(self, text, config, session_mgr):
         if not text.startswith("/"):
@@ -146,7 +151,13 @@ class PiSelectList:
         arg = parts[1] if len(parts) > 1 else ""
         arg_lower = arg.lower()
 
-        if " " in text:
+        subcommand_cmds = (
+            "/agent", "/model", "/effort", "/thinking", "/theme",
+            "/lang", "/language", "/server", "/connect", "/c",
+            "/close", "/stop", "/switch", "/sw"
+        )
+
+        if " " in text or (raw_cmd in subcommand_cmds and text.strip().lower() == raw_cmd):
             if raw_cmd == "/agent":
                 detected = detect_local_agents()
                 candidates = [
@@ -206,10 +217,12 @@ class PiSelectList:
     def move_up(self, total):
         if total > 0:
             self.selected_index = (self.selected_index - 1) % total
+            self.has_navigated = True
 
     def move_down(self, total):
         if total > 0:
             self.selected_index = (self.selected_index + 1) % total
+            self.has_navigated = True
 
     def get_selected(self, text, config, session_mgr):
         items = self.get_items(text, config, session_mgr)
@@ -389,61 +402,70 @@ class AgentCliApp:
                     if " " in buf.text:
                         cmd = buf.text.split(maxsplit=1)[0]
                         new_text = f"{cmd} {selected['cmd']}"
-                    else:
+                    elif selected["cmd"].startswith("/"):
                         new_text = f"{selected['cmd']} "
+                    else:
+                        new_text = f"{buf.text.strip()} {selected['cmd']}"
                     buf.document = Document(new_text, cursor_position=len(new_text))
-                    self.select_list.selected_index = 0
+                    self.select_list.reset()
             else:
                 buf.insert_text("  ")
 
         @bindings.add("enter")
         def _(event):
             buf = event.current_buffer
-            text = buf.text.strip()
+            raw_text = buf.text
+            text = raw_text.strip()
             exact_cmds = [item["cmd"] for item in COMMAND_REGISTRY]
+
             if text.startswith("/"):
-                if not (" " in text):
-                    if text not in exact_cmds:
-                        selected = self.select_list.get_selected(buf.text, self.config, self.session_mgr)
+                items = self.select_list.get_items(raw_text, self.config, self.session_mgr)
+                if items:
+                    is_subcommand_mode = (" " in raw_text) or any(raw_text.strip().lower() == c["cmd"] for c in COMMAND_REGISTRY if c.get("usage"))
+                    # If user actively navigated dropdown OR typed a space with subcommand, accept and execute immediately!
+                    if self.select_list.has_navigated or (is_subcommand_mode and " " in raw_text):
+                        selected = self.select_list.get_selected(raw_text, self.config, self.session_mgr)
                         if selected:
+                            if " " in raw_text:
+                                cmd = raw_text.split(maxsplit=1)[0]
+                                new_text = f"{cmd} {selected['cmd']}"
+                            elif selected["cmd"].startswith("/"):
+                                new_text = selected["cmd"]
+                            else:
+                                new_text = f"{raw_text.strip()} {selected['cmd']}"
+                            buf.document = Document(new_text, cursor_position=len(new_text))
+                            self.select_list.reset()
+                            buf.validate_and_handle()
+                            return
+                    elif not (" " in raw_text) and text not in exact_cmds:
+                        selected = self.select_list.get_selected(raw_text, self.config, self.session_mgr)
+                        if selected and selected["cmd"].startswith("/"):
                             new_text = f"{selected['cmd']} "
                             buf.document = Document(new_text, cursor_position=len(new_text))
-                            self.select_list.selected_index = 0
+                            self.select_list.reset()
                             return
-                else:
-                    parts = text.split(maxsplit=1)
-                    cmd = parts[0].lower()
-                    arg = parts[1] if len(parts) > 1 else ""
-                    items = self.select_list.get_items(buf.text, self.config, self.session_mgr)
-                    exact_args = [item["cmd"] for item in items]
-                    if items and (self.select_list.selected_index > 0 or (arg and arg not in exact_args)):
-                        selected = self.select_list.get_selected(buf.text, self.config, self.session_mgr)
-                        if selected:
-                            new_text = f"{cmd} {selected['cmd']}"
-                            buf.document = Document(new_text, cursor_position=len(new_text))
-                            self.select_list.selected_index = 0
-                            return
+
+            self.select_list.reset()
             buf.validate_and_handle()
 
         @bindings.add("backspace")
         def _(event):
             buf = event.current_buffer
             buf.delete_before_cursor(count=1)
-            self.select_list.selected_index = 0
+            self.select_list.reset()
 
         @bindings.add("delete")
         def _(event):
             buf = event.current_buffer
             buf.delete(count=1)
-            self.select_list.selected_index = 0
+            self.select_list.reset()
 
         @bindings.add("escape")
         def _(event):
             buf = event.current_buffer
-            # Only clear if typing a slash command (autocomplete active)
             if buf.text.startswith("/"):
                 buf.text = ""
-            self.select_list.selected_index = 0
+            self.select_list.reset()
 
         try:
             self.session_prompt = PromptSession(
@@ -970,6 +992,29 @@ class AgentCliApp:
             return
 
         servers = self.config.get_servers()
+
+        # Direct server connection by name or 'local'
+        if arg_lower == "local":
+            self._connect_to_server({"is_local": True, "name": "local", "default_dir": os.getcwd()})
+            return
+
+        if arg_lower:
+            matched = [s for s in servers if s.get("name", "").lower() == arg_lower or s.get("host", "").lower() == arg_lower or s.get("id", "").lower() == arg_lower]
+            if matched:
+                self._connect_to_server(matched[0])
+                return
+
+            if arg_lower in ("codex", "claude", "agy", "opencode", "shell"):
+                console.print(f"[{self.theme['accent']}]● Detected agent '{arg_lower}'. Switching active agent to '{arg_lower}'...[/{self.theme['accent']}]")
+                self.action_set_agent(arg_lower)
+                if servers:
+                    self._connect_to_server(servers[0])
+                return
+
+            avail = ["local"] + [s.get("name", "") for s in servers if s.get("name")]
+            console.print(f"[{self.theme['warning']}]● Server not found: {arg}. Available: {', '.join(avail)}[/{self.theme['warning']}]\n")
+            return
+
         active = self._get_active_session()
         active_name = active.name if active else None
 
@@ -1481,10 +1526,23 @@ class AgentCliApp:
             return
 
         new_model = self.config.get_model(agent_name)
-        if session:
+        self.config.update_settings({"default_agent": agent_name})
+
+        relaunch_note = ""
+        if session and session.status == "running" and session.backend:
             session.command = agent_name
             session.model = new_model
-        self.config.update_settings({"default_agent": agent_name})
+            try:
+                # Terminate any current agent process with Ctrl+C
+                session.backend.write("\x03\x03")
+                time.sleep(0.4)
+                effort = self.config.get_thinking_effort()
+                startup_cmd = build_startup_command(agent_name, model=new_model, effort=effort)
+                if startup_cmd:
+                    session.backend.write(f"{startup_cmd}\r\n")
+                relaunch_note = f"  Active session [{session.name}] switched to {agent_name}."
+            except Exception:
+                pass
 
         console.clear()
         console.print(self.render_header())
@@ -1492,7 +1550,13 @@ class AgentCliApp:
         path_tag = f" [{self.theme['dim']}]{info.get('path', '')}[/{self.theme['dim']}]" if info.get('path') else ""
         switched_label = f"[bold]{info['name']}{ver_tag}[/bold]"
         console.print(f"[{self.theme['success']}]● {_t('agent.switched', name=switched_label)}{path_tag}[/{self.theme['success']}]")
-        console.print(f"[{self.theme['dim']}]  Model: [bold]{new_model}[/bold] (synced from {agent_name} local configuration)[/{self.theme['dim']}]\n")
+        console.print(f"[{self.theme['dim']}]  Model: [bold]{new_model}[/bold] (synced from {agent_name} local configuration)[/{self.theme['dim']}]")
+        if relaunch_note:
+            console.print(f"[{self.theme['accent']}]{relaunch_note}[/{self.theme['accent']}]\n")
+        elif not session:
+            servers = self.config.get_servers()
+            srv_hint = f"/server {servers[0]['name']}" if servers else "/server local"
+            console.print(f"[{self.theme['accent']}]  Tip: Type [{self.theme['primary']}]{srv_hint}[/{self.theme['primary']}] to launch {agent_name} on your server or local machine.[/{self.theme['accent']}]\n")
 
     def action_show_status(self):
         session = self._get_active_session()
@@ -1575,28 +1639,36 @@ class AgentCliApp:
         a = self.theme["accent"]
         d = self.theme["dim"]
 
-        console.print(f"[{a}]● Dispatched to {agent} in [{session.name}]...[/{a}] [{d}](Type /sh to interact directly)[/{d}]")
-        session.backend.write(prompt + "\n")
+        console.print(f"[{a}]● Dispatched to {agent} in [{session.name}]...[/{a}] [{d}](Type /sh to interact directly, Ctrl+C to return to prompt)[/{d}]")
+        # Send text, followed by brief delay and \r so raw terminal TUIs (Codex, Claude, etc.) register Submit
+        session.backend.write(prompt)
+        time.sleep(0.08)
+        session.backend.write("\r")
 
-        # Stream output directly to user for a few seconds so user sees response live
+        # Stream output directly to user so user sees response live
         printed = [0]
         def on_stream_output(chunk):
-            sys.stdout.write(chunk)
-            sys.stdout.flush()
-            printed[0] += len(chunk)
+            try:
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+                printed[0] += len(chunk)
+            except Exception:
+                pass
 
         session.output_listeners.add(on_stream_output)
         try:
             t0 = time.time()
             last_change = time.time()
             last_cnt = 0
-            while time.time() - t0 < 6:
+            while time.time() - t0 < 120:
                 time.sleep(0.08)
                 if printed[0] != last_cnt:
                     last_cnt = printed[0]
                     last_change = time.time()
-                elif printed[0] > 0 and (time.time() - last_change > 1.2):
+                elif printed[0] > 0 and (time.time() - last_change > 4.5):
                     break
+        except KeyboardInterrupt:
+            pass
         finally:
             if on_stream_output in session.output_listeners:
                 session.output_listeners.remove(on_stream_output)

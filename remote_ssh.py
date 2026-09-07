@@ -184,7 +184,7 @@ class SSHSession:
 
             # Execute initial command if provided
             if self.initial_cmd:
-                time.sleep(0.1)
+                time.sleep(0.6)
                 self.write(self.initial_cmd.strip() + "\r\n")
 
             return True, "Connected"
