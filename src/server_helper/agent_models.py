@@ -7,6 +7,13 @@ discovers their configured and available AI models.
 import os
 import json
 import re
+import time
+
+# get_agent_models() sits on keystroke-frequency hot paths (toolbar render,
+# slash completion). The loaders read several JSON/TOML files from disk (and
+# codex may attempt HTTP), so cache results per agent with a short TTL.
+_MODELS_CACHE = {}
+_MODELS_TTL = 10.0  # seconds
 
 DEFAULT_AGY_MODELS = [
     {"cmd": "gemini-3.8-flash", "name": "Gemini 3.8 Flash", "desc": "Google latest flagship default model (fast & smart)", "badge": "default"},
@@ -223,10 +230,10 @@ def load_codex_models():
                         mid = item.get("id") if isinstance(item, dict) else (item if isinstance(item, str) else None)
                         if mid and mid not in live_models:
                             live_models.append(mid)
-                    if live_models:
-                        _CODEX_MODELS_CACHE = live_models
             except Exception:
                 pass
+            _CODEX_MODELS_CACHE = list(live_models)
+            live_models = list(_CODEX_MODELS_CACHE)
 
     models = []
     seen = set()
@@ -290,12 +297,7 @@ def load_aider_models():
     ]
 
 
-def get_agent_models(agent_id):
-    """
-    Dynamically gets the model list for a given agent by inspecting its local config.
-    agent_id: 'opencode', 'claude', 'codex', 'agy', 'aider', 'goose', 'shell'
-    """
-    agent = (agent_id or "agy").lower().strip()
+def _load_agent_models_uncached(agent):
     if agent == "opencode":
         return load_opencode_models()
     elif agent == "claude":
@@ -306,10 +308,30 @@ def get_agent_models(agent_id):
         return load_agy_models()
     elif agent == "aider":
         return load_aider_models()
+    elif agent == "goose":
+        return [{"cmd": "default", "label": "default", "name": "Goose Default", "desc": "Goose agent default model configuration", "badge": "default"}]
     elif agent == "shell":
         return [{"cmd": "none", "label": "none", "name": "Native Shell", "desc": "Raw terminal shell without LLM model wrapper", "badge": "system"}]
     else:
         return load_agy_models()
+
+
+def get_agent_models(agent_id, force_refresh=False):
+    """
+    Dynamically gets the model list for a given agent by inspecting its local config.
+    agent_id: 'opencode', 'claude', 'codex', 'agy', 'aider', 'goose', 'shell'
+
+    Results are cached for _MODELS_TTL seconds because this is called from
+    keystroke-frequency UI paths; pass force_refresh=True after config edits.
+    """
+    agent = (agent_id or "agy").lower().strip()
+    now = time.time()
+    hit = _MODELS_CACHE.get(agent)
+    if hit and not force_refresh and (now - hit[0]) < _MODELS_TTL:
+        return hit[1]
+    models = _load_agent_models_uncached(agent)
+    _MODELS_CACHE[agent] = (now, models)
+    return models
 
 
 def get_default_model_for_agent(agent_id):

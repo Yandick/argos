@@ -3,12 +3,49 @@ Windows Local PTY Process Manager via pywinpty
 """
 import os
 import sys
+import base64
 import shutil
 
 try:
     from winpty import PtyProcess
 except ImportError:  # non-Windows platform or pywinpty not installed
     PtyProcess = None
+
+
+def _tokenize_args(s):
+    """Split a user-typed argument string on spaces, honoring double quotes.
+
+    Backslashes stay literal so Windows paths survive intact.
+    """
+    tokens, cur, in_q = [], [], False
+    for ch in (s or ""):
+        if ch == '"':
+            in_q = not in_q
+        elif ch == " " and not in_q:
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        tokens.append("".join(cur))
+    return tokens
+
+
+def _ps_launch_command(exe_path, user_args):
+    """Build a PowerShell launch command safe for arbitrary user arguments.
+
+    The script is passed via -EncodedCommand (base64 of UTF-16LE), so raw
+    quotes / $ / backticks / semicolons in user input can never break out of
+    the outer Windows command line or the PowerShell parser. Each argument
+    becomes a PowerShell single-quoted literal.
+    """
+    parts = ["&", "'" + str(exe_path).replace("'", "''") + "'"]
+    for tok in _tokenize_args(user_args):
+        parts.append("'" + tok.replace("'", "''") + "'")
+    script = " ".join(parts)
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return f"powershell.exe -NoLogo -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
 
 class LocalPty:
@@ -30,10 +67,8 @@ class LocalPty:
     def _resolve_cmd(self, cmd):
         cmd = cmd.strip()
         if cmd == "claude" or cmd.startswith("claude "):
-            claude_cmd = shutil.which("claude.cmd") or shutil.which("claude.exe") or shutil.which("claude")
-            if claude_cmd and os.path.exists(claude_cmd):
-                return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{claude_cmd}\' {cmd[6:]}"'
-            return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
+            claude_cmd = shutil.which("claude.cmd") or shutil.which("claude.exe") or shutil.which("claude") or "claude"
+            return _ps_launch_command(claude_cmd, cmd[6:].strip())
 
         if cmd == "agy" or cmd.startswith("agy "):
             agy_cmd = shutil.which("agy.exe") or shutil.which("agy") or os.path.expanduser(r"~\AppData\Local\agy\bin\agy.exe")
@@ -43,19 +78,13 @@ class LocalPty:
 
         # If user asked for codex
         if cmd == "codex" or cmd.startswith("codex "):
-            codex_cmd = shutil.which("codex.cmd") or shutil.which("codex.exe") or shutil.which("codex")
-            args = cmd[5:].strip()
-            if codex_cmd and os.path.exists(codex_cmd):
-                return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{codex_cmd}\' {args}"'.strip()
-            return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
+            codex_cmd = shutil.which("codex.cmd") or shutil.which("codex.exe") or shutil.which("codex") or "codex"
+            return _ps_launch_command(codex_cmd, cmd[5:].strip())
 
         # If user asked for opencode
         if cmd == "opencode" or cmd.startswith("opencode "):
-            opencode_cmd = shutil.which("opencode.cmd") or shutil.which("opencode.exe") or shutil.which("opencode")
-            args = cmd[8:].strip()
-            if opencode_cmd and os.path.exists(opencode_cmd):
-                return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "& \'{opencode_cmd}\' {args}"'.strip()
-            return f'powershell.exe -NoLogo -ExecutionPolicy Bypass -Command "{cmd}"'
+            opencode_cmd = shutil.which("opencode.cmd") or shutil.which("opencode.exe") or shutil.which("opencode") or "opencode"
+            return _ps_launch_command(opencode_cmd, cmd[8:].strip())
 
         if cmd in ("pwsh", "powershell", "powershell.exe"):
             return "powershell.exe -NoLogo -ExecutionPolicy Bypass"

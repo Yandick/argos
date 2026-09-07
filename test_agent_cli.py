@@ -43,8 +43,10 @@ def test_cli():
     app.handle_slash_command("/config", "")
     print("  - /config : 成功解析 setting.json")
 
-    app.handle_slash_command("/servers", "")
-    print("  - /servers : 成功查询已配置服务器列表")
+    # Use the non-interactive "list" subcommand: bare /servers opens the
+    # arrow-key picker, which blocks without a real interactive console.
+    app.handle_slash_command("/servers", "list")
+    print("  - /servers list : 成功查询已配置服务器列表")
 
     app.handle_slash_command("/tasks", "")
     print("  - /tasks : 成功展示运行中任务列表")

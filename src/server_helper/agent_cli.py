@@ -139,10 +139,28 @@ class PiSelectList:
         self.max_visible = max_visible
         self.selected_index = 0
         self.has_navigated = False
+        # TTL cache for remote directory listings: get_items() runs on every
+        # keystroke and must not trigger an SFTP round-trip each time.
+        self._dir_cache = {}
 
     def reset(self):
         self.selected_index = 0
         self.has_navigated = False
+
+    def _list_remote_dirs_cached(self, session, curr_dir, ttl=5.0):
+        """SFTP listing with a short TTL cache (keystroke-frequency hot path)."""
+        key = (getattr(session, "session_id", id(session)), curr_dir)
+        now = time.time()
+        hit = self._dir_cache.get(key)
+        if hit and (now - hit[0]) < ttl:
+            return hit[1]
+        entries = session.backend.list_sftp_files(curr_dir)
+        # Bound cache size: drop the oldest half when it grows too large.
+        if len(self._dir_cache) > 64:
+            for k, _ in sorted(self._dir_cache.items(), key=lambda kv: kv[1][0])[:32]:
+                self._dir_cache.pop(k, None)
+        self._dir_cache[key] = (now, entries)
+        return entries
 
     def get_items(self, text, config, session_mgr):
         if not text.startswith("/"):
@@ -154,7 +172,7 @@ class PiSelectList:
 
         subcommand_cmds = (
             "/agent", "/model", "/effort", "/thinking", "/theme",
-            "/lang", "/language", "/server", "/connect", "/c",
+            "/lang", "/language", "/server", "/servers", "/connect", "/c",
             "/cd", "/workspace", "/ws",
             "/close", "/stop", "/switch", "/sw"
         )
@@ -206,7 +224,7 @@ class PiSelectList:
                 if session and session.session_type == "remote_ssh" and hasattr(session.backend, "list_sftp_files"):
                     try:
                         import posixpath
-                        entries = session.backend.list_sftp_files(curr_dir)
+                        entries = self._list_remote_dirs_cached(session, curr_dir)
                         if isinstance(entries, list) and not (entries and "error" in entries[0]):
                             for e in entries:
                                 if e.get("is_dir") and not str(e.get("name", "")).startswith("."):
@@ -225,10 +243,11 @@ class PiSelectList:
                                     candidates.append({"cmd": p, "desc": f"Subfolder in {base}"})
                     except Exception:
                         pass
-            elif raw_cmd in ("/server", "/connect", "/c"):
+            elif raw_cmd in ("/server", "/servers", "/connect", "/c"):
                 servers = config.get_servers()
                 candidates = [{"cmd": s.get("name", ""), "desc": f"{s.get('user', 'root')}@{s.get('host', '')}"} for s in servers if s.get("name")]
                 candidates.extend([
+                    {"cmd": "list", "desc": "List saved servers (non-interactive)"},
                     {"cmd": "add", "desc": "Add a new target server"},
                     {"cmd": "rename", "desc": "Rename an existing server"},
                     {"cmd": "rm", "desc": "Delete an existing server"},
@@ -379,7 +398,7 @@ class AgentCliApp:
                 if len(rdir) > 22:
                     rdir = "..." + rdir[-19:]
                 rdir = html.escape(rdir)
-                agent = html.escape(session.command or "agy")
+                agent = html.escape((session.command or "").split(None, 1)[0] or "agy")
                 model = html.escape(getattr(session, "model", "") or self.config.get_model(agent))
                 effort = html.escape(str(self.config.get_thinking_effort()))
                 return HTML(
@@ -457,26 +476,26 @@ class AgentCliApp:
             exact_cmds = [item["cmd"] for item in COMMAND_REGISTRY]
 
             if text.startswith("/"):
-                items = self.select_list.get_items(raw_text, self.config, self.session_mgr)
+                items = self.select_list.get_items(text, self.config, self.session_mgr)
                 if items:
-                    is_subcommand_mode = (" " in raw_text) or any(raw_text.strip().lower() == c["cmd"] for c in COMMAND_REGISTRY if c.get("usage"))
+                    is_subcommand_mode = (" " in text) or any(text.lower() == c["cmd"] for c in COMMAND_REGISTRY if c.get("usage"))
                     # If user actively navigated dropdown OR typed a space with subcommand, accept and execute immediately!
-                    if self.select_list.has_navigated or (is_subcommand_mode and " " in raw_text):
-                        selected = self.select_list.get_selected(raw_text, self.config, self.session_mgr)
+                    if self.select_list.has_navigated or (is_subcommand_mode and " " in text):
+                        selected = self.select_list.get_selected(text, self.config, self.session_mgr)
                         if selected:
-                            if " " in raw_text:
-                                cmd = raw_text.split(maxsplit=1)[0]
+                            if " " in text:
+                                cmd = text.split(maxsplit=1)[0]
                                 new_text = f"{cmd} {selected['cmd']}"
                             elif selected["cmd"].startswith("/"):
                                 new_text = selected["cmd"]
                             else:
-                                new_text = f"{raw_text.strip()} {selected['cmd']}"
+                                new_text = f"{text} {selected['cmd']}"
                             buf.document = Document(new_text, cursor_position=len(new_text))
                             self.select_list.reset()
                             buf.validate_and_handle()
                             return
-                    elif not (" " in raw_text) and text not in exact_cmds:
-                        selected = self.select_list.get_selected(raw_text, self.config, self.session_mgr)
+                    elif not (" " in text) and text not in exact_cmds:
+                        selected = self.select_list.get_selected(text, self.config, self.session_mgr)
                         if selected and selected["cmd"].startswith("/"):
                             new_text = f"{selected['cmd']} "
                             buf.document = Document(new_text, cursor_position=len(new_text))
@@ -542,26 +561,26 @@ class AgentCliApp:
         swatch = render_swatch(self.theme)
 
         session = self._get_active_session()
-        active_agent = (session.command if session else None) or self.config.get_settings().get("default_agent", "agy")
+        active_agent = ((session.command or "").split(None, 1)[0] if session and session.command else None) or self.config.get_settings().get("default_agent", "agy")
         ag_info = get_agent_info(active_agent)
         ver_badge = f" ({ag_info['version']})" if ag_info and ag_info.get("version") else ""
         model_name = getattr(session, "model", "") if session else self.config.get_model(active_agent)
 
         if session:
             srv_info = session.server_info or {}
-            srv_str = f"{session.name} ({srv_info.get('user', 'root')}@{srv_info.get('host', 'local')}:{srv_info.get('port', 22)})"
-            rdir = session.remote_dir or "/"
-            agent_str = f"{active_agent}{ver_badge} · {model_name}"
+            srv_str = rich_escape(f"{session.name} ({srv_info.get('user', 'root')}@{srv_info.get('host', 'local')}:{srv_info.get('port', 22)})")
+            rdir = rich_escape(session.remote_dir or "/")
+            agent_str = rich_escape(f"{active_agent}{ver_badge} · {model_name}")
             status_tag = f"[{s}]● {_t('banner.running')}[/{s}]"
         else:
             srv_str = _t('banner.notConnected')
             rdir = "/"
-            agent_str = f"{active_agent}{ver_badge} · {model_name}"
+            agent_str = rich_escape(f"{active_agent}{ver_badge} · {model_name}")
             status_tag = f"[{d}]{_t('banner.idle')}[/{d}]"
 
         effort = self.config.get_thinking_effort()
         proxy = self.config.get_proxy()
-        proxy_str = f"[{s}]{proxy}[/{s}]" if proxy else f"[{d}]{_t('banner.directNoProxy')}[/{d}]"
+        proxy_str = f"[{s}]{rich_escape(proxy)}[/{s}]" if proxy else f"[{d}]{_t('banner.directNoProxy')}[/{d}]"
 
         # Logo + tagline
         logo = (
@@ -591,12 +610,23 @@ class AgentCliApp:
             f"[{d}]/[/{d}][{a}]help[/{a}]"
         )
 
-        # Assemble
-        from io import StringIO
-        grid_buf = StringIO()
-        grid_console = Console(file=grid_buf, force_terminal=True, width=shutil.get_terminal_size().columns - 6)
-        grid_console.print(grid, end="")
-        grid_text = grid_buf.getvalue().rstrip()
+        # Assemble — reuse a cached off-screen Console instead of building a
+        # new Console+StringIO on every call (render_header runs after every
+        # action; Console construction is comparatively expensive).
+        width = max(20, shutil.get_terminal_size().columns - 6)
+        if getattr(self, "_grid_console", None) is None:
+            from io import StringIO
+            self._grid_buf = StringIO()
+            self._grid_console = Console(file=self._grid_buf, force_terminal=True, width=width)
+        else:
+            self._grid_buf.seek(0)
+            self._grid_buf.truncate(0)
+            try:
+                self._grid_console.width = width
+            except Exception:
+                pass
+        self._grid_console.print(grid, end="")
+        grid_text = self._grid_buf.getvalue().rstrip()
 
         card = f"{logo}\n\n{grid_text}\n\n  {shortcuts}"
         return Panel(card, border_style=border, padding=(1, 2))
@@ -679,7 +709,7 @@ class AgentCliApp:
 
     def handle_slash_command(self, cmd, arg):
         known_cmds = [
-            "/exit", "/quit", "/help", "/clear", "/server", "/connect", "/c",
+            "/exit", "/quit", "/help", "/clear", "/server", "/servers", "/connect", "/c",
             "/cd", "/workspace", "/ws",
             "/theme", "/model", "/effort", "/thinking", "/proxy", "/files",
             "/ls", "/dir", "/tasks", "/sessions", "/switch", "/sw", "/terminal",
@@ -705,7 +735,7 @@ class AgentCliApp:
             console.print(self.render_header())
             console.print()
 
-        elif cmd in ("/server", "/connect", "/c"):
+        elif cmd in ("/server", "/servers", "/connect", "/c"):
             self.action_servers(arg)
 
         elif cmd in ("/cd", "/workspace", "/ws"):
@@ -852,7 +882,7 @@ class AgentCliApp:
     def action_model(self, arg=""):
         arg = (arg or "").strip()
         session = self._get_active_session()
-        agent = (session.command if session else None) or self.config.get_settings().get("default_agent", "agy")
+        agent = ((session.command or "").split(None, 1)[0] if session and session.command else None) or self.config.get_settings().get("default_agent", "agy")
         curr_model = getattr(session, "model", "") or self.config.get_model(agent)
 
         models = get_agent_models(agent)
@@ -930,7 +960,7 @@ class AgentCliApp:
         if arg in ("low", "medium", "high", "off"):
             self.config.set_thinking_effort(arg)
             session = self._get_active_session()
-            if session and session.command == "agy" and session.backend:
+            if session and (session.command or "").split(None, 1)[0] == "agy" and session.backend:
                 session.backend.write(f"/effort {arg}\n")
             console.print(f"[{self.theme['success']}]● Reasoning effort set to: [bold]{arg}[/bold][/{self.theme['success']}]\n")
             return
@@ -951,7 +981,7 @@ class AgentCliApp:
             lvl = chosen_item["label"]
             self.config.set_thinking_effort(lvl)
             session = self._get_active_session()
-            if session and session.command == "agy" and session.backend:
+            if session and (session.command or "").split(None, 1)[0] == "agy" and session.backend:
                 session.backend.write(f"/effort {lvl}\n")
             console.clear()
             console.print(self.render_header())
@@ -1034,6 +1064,24 @@ class AgentCliApp:
 
         if target_name in ("rm", "remove", "del"):
             self._prompt_remove_server()
+            return
+
+        if target_name in ("list", "ls"):
+            # Non-interactive listing (scriptable / test-friendly); the bare
+            # /server command still opens the interactive picker.
+            servers = self.config.get_servers()
+            if not servers:
+                console.print(f"[{self.theme['dim']}]● No servers configured. Type /server add to create one.[/{self.theme['dim']}]")
+                return
+            console.print(f"\n[{self.theme['primary']}][bold]● Saved Servers[/bold][/{self.theme['primary']}]")
+            for idx, srv in enumerate(servers, 1):
+                u = srv.get("user") or srv.get("username") or "root"
+                h = srv.get("host", "")
+                p = srv.get("port", 22)
+                auth = srv.get("auth_type") or srv.get("auth") or "key"
+                line = f"{u}@{h}:{p} ({auth}) · {srv.get('default_dir') or '/'}"
+                console.print(f"  [{idx}] [bold]{rich_escape(str(srv.get('name', '')))}[/bold] [{self.theme['dim']}]{rich_escape(line)}[/{self.theme['dim']}]")
+            console.print()
             return
 
         servers = self.config.get_servers()
@@ -1254,7 +1302,7 @@ class AgentCliApp:
                 files = [e["name"] for e in entries if not e.get("is_dir")][:6]
                 d_str = " ".join(dirs)
                 f_str = " ".join(files)
-                files_line = f"  [{a}]Workspace Files:[/{a}] [{txt}]{d_str} {f_str}[/{txt}] [{d}]({len(entries)} items · type /files to view all)[/{d}]\n"
+                files_line = f"  [{a}]Workspace Files:[/{a}] [{txt}]{rich_escape(d_str)} {rich_escape(f_str)}[/{txt}] [{d}]({len(entries)} items · type /files to view all)[/{d}]\n"
         except Exception:
             pass
 
@@ -1267,12 +1315,12 @@ class AgentCliApp:
         proxy_info = "127.0.0.1:(10808/7897) ➔ 7897 (SSH tunnel active)" if self.config.get_proxy() else "direct"
 
         banner = (
-            f"[{s}][bold]● Connected: {task_name}[/bold][/{s}] [{d}]({session.session_type})[/{d}]\n\n"
-            f"  [{a}]Target:[/{a}]          [{txt}]{task_name}[/{txt}] [{d}]({srv_str})[/{d}]\n"
-            f"  [{a}]Directory:[/{a}]       [{p}]{work_dir}[/{p}]\n"
+            f"[{s}][bold]● Connected: {rich_escape(task_name)}[/bold][/{s}] [{d}]({session.session_type})[/{d}]\n\n"
+            f"  [{a}]Target:[/{a}]          [{txt}]{rich_escape(task_name)}[/{txt}] [{d}]({rich_escape(srv_str)})[/{d}]\n"
+            f"  [{a}]Directory:[/{a}]       [{p}]{rich_escape(work_dir)}[/{p}]\n"
             f"{files_line}"
-            f"  [{a}]Engine:[/{a}]          [{txt}]{agent_type}[/{txt}] [{d}]({model_name}, effort: {effort_level})[/{d}]\n"
-            f"  [{a}]Proxy Tunnel:[/{a}]    [{s}]{proxy_info}[/{s}]\n\n"
+            f"  [{a}]Engine:[/{a}]          [{txt}]{rich_escape(agent_type)}[/{txt}] [{d}]({rich_escape(model_name)}, effort: {effort_level})[/{d}]\n"
+            f"  [{a}]Proxy Tunnel:[/{a}]    [{s}]{rich_escape(proxy_info)}[/{s}]\n\n"
             f"[{d}]Quick Actions: Type prompt to dispatch · [/{d}][{a}]/files[/{a}] [{d}]list files · [/{d}][{a}]/sh[/{a}] [{d}]terminal · [/{d}][{a}]/status[/{a}] [{d}]GPU status[/{d}]"
         )
         console.print(Panel(banner, border_style=s, padding=(0, 1)))
@@ -1360,7 +1408,7 @@ class AgentCliApp:
                 else:
                     target_path = posixpath.normpath(target_path)
             else:
-                base_dir = session.remote_dir if session else os.getcwd()
+                base_dir = (session.remote_dir if session else None) or os.getcwd()
                 if not os.path.isabs(target_path):
                     target_path = os.path.normpath(os.path.join(base_dir, target_path))
                 else:
@@ -1438,13 +1486,16 @@ class AgentCliApp:
             session.remote_dir = target_dir
             try:
                 if session.session_type == "remote_ssh":
-                    if session.command == "agy":
-                        session.backend.write(f"/cd {target_dir}\n")
+                    agent_cmd = (session.command or "").split()[0] if session.command else ""
+                    if agent_cmd == "agy":
+                        import shlex as _sq
+                        session.backend.write(f"/cd {_sq.quote(target_dir)}\n")
                     else:
                         import shlex
                         session.backend.write(f"cd {shlex.quote(target_dir)}\r\n")
                 elif session.session_type == "local_pty":
-                    session.backend.write(f"cd {target_dir}\r\n")
+                    import shlex as _shlex
+                    session.backend.write(f"cd {_shlex.quote(target_dir)}\r\n")
                     try:
                         os.chdir(target_dir)
                     except Exception:
@@ -1473,16 +1524,16 @@ class AgentCliApp:
         console.clear()
         console.print(self.render_header())
 
-        lines = [f"[{s}][bold]● {_t('cd.switched', path=target_dir)}[/bold][/{s}]"]
+        lines = [f"[{s}][bold]● {rich_escape(_t('cd.switched', path=target_dir))}[/bold][/{s}]"]
         if entries and not (len(entries) == 1 and "error" in entries[0]):
             dirs = [e["name"] + "/" for e in entries if e.get("is_dir")][:6]
             files = [e["name"] for e in entries if not e.get("is_dir")][:8]
             d_str = " ".join(dirs)
             f_str = " ".join(files)
             if d_str:
-                lines.append(f"  [{a}]Subfolders:[/{a}] [{txt}]{d_str}[/{txt}]")
+                lines.append(f"  [{a}]Subfolders:[/{a}] [{txt}]{rich_escape(d_str)}[/{txt}]")
             if f_str:
-                lines.append(f"  [{a}]Files:[/{a}]      [{txt}]{f_str}[/{txt}] [{d}]({len(entries)} items · /files to view all)[/{d}]")
+                lines.append(f"  [{a}]Files:[/{a}]      [{txt}]{rich_escape(f_str)}[/{txt}] [{d}]({len(entries)} items · /files to view all)[/{d}]")
 
         console.print(Panel("\n".join(lines), border_style=s, padding=(0, 1)))
         console.print()
@@ -1494,7 +1545,7 @@ class AgentCliApp:
             return
 
         target_dir = arg.strip() or session.remote_dir or "/"
-        console.print(f"● Workspace [{self.theme['primary']}]{target_dir}[/{self.theme['primary']}] ({session.name}):")
+        console.print(f"● Workspace [{self.theme['primary']}]{rich_escape(target_dir)}[/{self.theme['primary']}] ({rich_escape(session.name)}):")
 
         entries = []
         if session.session_type == "remote_ssh" and hasattr(session.backend, "list_sftp_files"):
@@ -1560,7 +1611,7 @@ class AgentCliApp:
             agent = s.command or "agent"
             model_info = getattr(s, "model", "")
             agent_str = f"{agent}({model_info})" if model_info else agent
-            console.print(f"  [{idx}] [bold]{s.name:<18}[/bold] [{d}]{target:<14}[/{d}] [{p}]{rdir:<20}[/{p}] [{a}]{agent_str:<18}[/{a}] [{self.theme['success']}]{s.status}[/{self.theme['success']}]{is_active}")
+            console.print(f"  [{idx}] [bold]{rich_escape(s.name):<18}[/bold] [{d}]{rich_escape(target):<14}[/{d}] [{p}]{rich_escape(rdir):<20}[/{p}] [{a}]{rich_escape(agent_str):<18}[/{a}] [{self.theme['success']}]{s.status}[/{self.theme['success']}]{is_active}")
         console.print(f"\n  [{d}]Type [{a}]/switch <name|#>[/{a}] to switch, [{a}]/sh[/{a}] to attach terminal[/{d}]\n")
 
     def action_switch_task(self, name):
@@ -1601,7 +1652,7 @@ class AgentCliApp:
 
         a = self.theme["accent"]
         d = self.theme["dim"]
-        console.print(f"\n● [bold]Attached to {session.name}[/bold] ({session.command or 'shell'})")
+        console.print(f"\n● [bold]Attached to {rich_escape(session.name)}[/bold] ({rich_escape((session.command or '').split(None, 1)[0] or 'shell')})")
         console.print(f"[{d}]Press [bold yellow]Ctrl + ][/bold yellow] to detach and return to Argos prompt[/{d}]\n")
 
         # Replay last lines of scrollback if available
@@ -1686,9 +1737,12 @@ class AgentCliApp:
     def action_set_agent(self, agent_name=""):
         agent_name = (agent_name or "").strip().lower()
         session = self._get_active_session()
-        curr_agent = (session.command if session else None) or self.config.get_settings().get("default_agent", "agy")
+        curr_agent = ((session.command or "").split(None, 1)[0] if session and session.command else None) or self.config.get_settings().get("default_agent", "agy")
 
-        detected = detect_local_agents(force_refresh=True)
+        # Use the cached detection result; re-probing every agent's --version
+        # on each /agent invocation wastes up to seconds. Installations rarely
+        # change mid-session (restart the CLI to re-detect).
+        detected = detect_local_agents()
 
         # Interactive arrow-key selection if no agent_name provided
         if not agent_name:
@@ -1847,15 +1901,15 @@ class AgentCliApp:
             console.print(f"[{self.theme['dim']}]● No environment connected. Type [{self.theme['accent']}][bold]/server[/bold][/{self.theme['accent']}] to connect to a local or remote server.[/{self.theme['dim']}]")
             return
 
-        agent = (session.command or "agy").lower()
+        agent = ((session.command or "").split(None, 1)[0] or "agy").lower()
         a = self.theme["accent"]
         d = self.theme["dim"]
 
         console.print(f"[{a}]● Dispatched to {agent} in [{session.name}]...[/{a}] [{d}](Type /sh to interact directly, Ctrl+C to return to prompt)[/{d}]")
-        # Send text, followed by brief delay and \r so raw terminal TUIs (Codex, Claude, etc.) register Submit
+        # Send text, followed by brief delay and newline so both line-buffered and TUI agents register Submit
         session.backend.write(prompt)
         time.sleep(0.08)
-        session.backend.write("\r")
+        session.backend.write("\n")
 
         # Stream output directly to user so user sees response live
         printed = [0]

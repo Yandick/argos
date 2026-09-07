@@ -21,6 +21,19 @@ from rich.panel import Panel
 console = Console()
 
 
+def _stdin_interactive():
+    """True only when raw single-key input can actually be read.
+
+    The pickers block on msvcrt.getch() / termios reads; in non-TTY contexts
+    (piped stdin, CI, automated tests) they would hang forever. Callers fall
+    back to a one-shot non-interactive listing when this returns False.
+    """
+    try:
+        return bool(sys.stdin.isatty())
+    except Exception:
+        return False
+
+
 def read_single_key():
     """Reads a single keypress cross-platform."""
     if sys.platform == "win32":
@@ -103,6 +116,14 @@ def interactive_theme_picker(themes, current_theme_id):
     Arrow-key theme picker with LIVE REAL-TIME PREVIEW.
     Compact layout designed to fit in 24-row terminals.
     """
+    if not _stdin_interactive():
+        console.print("  Available themes (interactive picker needs a TTY):")
+        for t in themes:
+            cur = " [green]<=[/green]" if t["id"] == current_theme_id else ""
+            console.print(f"    {t['id']:<20} {t['name']}{cur}")
+        console.print("  [dim]Use /theme <name> to switch directly.[/dim]")
+        return None
+
     hide_cursor()
     selected_idx = 0
     for idx, t in enumerate(themes):
@@ -180,6 +201,21 @@ def interactive_menu_select(title, items, current_idx=0, extra_shortcuts=None, t
     """
     General arrow-key interactive selector with pagination (max 8 visible).
     """
+    if not _stdin_interactive():
+        # Non-TTY fallback: print the list once instead of blocking forever
+        # on raw key reads (pipes, CI, automated tests).
+        console.print(f"  [bold]{title}[/bold]")
+        for it in items:
+            if isinstance(it, dict):
+                label = str(it.get("label", ""))
+                desc = str(it.get("desc", ""))
+                badge = str(it.get("badge", ""))
+            else:
+                label, desc, badge = str(it), "", ""
+            console.print(f"    {label:<22} [dim]{desc}[/dim] {badge}".rstrip())
+        console.print("  [dim](non-interactive terminal: pass the choice as an argument instead)[/dim]")
+        return ("cancel", None, -1)
+
     hide_cursor()
     p = theme["primary"] if theme else "cyan"
     a = theme["accent"] if theme else "magenta"
@@ -268,6 +304,12 @@ def interactive_dir_picker(
       - Safe cancellation (Esc or 'q')
     """
     import posixpath
+
+    if not _stdin_interactive():
+        shown = initial_dir or os.getcwd()
+        console.print(f"  {title or 'Workspace directory'}: [bold]{shown}[/bold]")
+        console.print("  [dim](non-interactive terminal: directory picker unavailable — pass a path directly, e.g. /cd <path>)[/dim]")
+        return None
 
     hide_cursor()
     p = theme["primary"] if theme else "cyan"
@@ -470,7 +512,7 @@ def interactive_dir_picker(
                 if not is_at_root:
                     curr_dir = parent_dir
                     selected_idx = 0
-            elif key == "t":
+            elif key == "t" or (key == "enter" and items[selected_idx]["type"] == "custom"):
                 show_cursor()
                 console.print(f"\n  [{a}][bold]Type Directory Path[/bold][/{a}]")
                 console.print(f"  [{d}]Current: {curr_dir}[/{d}]")
@@ -495,36 +537,9 @@ def interactive_dir_picker(
                 it = items[selected_idx]
                 if it["type"] == "confirm":
                     return it["path"]
-                elif it["type"] == "up":
+                elif it["type"] in ("up", "dir", "recent"):
                     curr_dir = it["path"]
                     selected_idx = 0
-                elif it["type"] == "dir":
-                    curr_dir = it["path"]
-                    selected_idx = 0
-                elif it["type"] == "recent":
-                    curr_dir = it["path"]
-                    selected_idx = 0
-                elif it["type"] == "custom":
-                    show_cursor()
-                    console.print(f"\n  [{a}][bold]Type Directory Path[/bold][/{a}]")
-                    console.print(f"  [{d}]Current: {curr_dir}[/{d}]")
-                    try:
-                        user_val = input("  › Path: ").strip()
-                        if user_val:
-                            if pmod == posixpath:
-                                if user_val.startswith("/"):
-                                    curr_dir = pmod.normpath(user_val)
-                                else:
-                                    curr_dir = pmod.normpath(pmod.join(curr_dir, user_val))
-                            else:
-                                if os.path.isabs(user_val):
-                                    curr_dir = os.path.normpath(user_val)
-                                else:
-                                    curr_dir = os.path.normpath(os.path.join(curr_dir, user_val))
-                            selected_idx = 0
-                    except (KeyboardInterrupt, EOFError):
-                        pass
-                    hide_cursor()
                 elif it["type"] == "info":
                     pass
             elif key in ("escape", "q"):
